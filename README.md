@@ -1,10 +1,10 @@
 # Files in this directory
 
-  - `src/problem.py`: Define optimization problems.
+  - `src/problem.py`: defines optimization problems.
 
-  - `src/ProSRS.py`: Implement ProSRS algorithm. 
+  - `src/ProSRS.py`: implements ProSRS algorithm. 
 
-  - `src/run.py`: Run ProSRS algorithm to solve optimization problems.
+  - `src/run.py`: runs ProSRS algorithm to solve optimization problems.
    
 # Installation
   
@@ -54,7 +54,7 @@ Below we give some general guidelines for setting parameters in `src/run.py`:
      
      For example, to complete a run of `n_iter = 20`. You could first run the code with `n_iter = 10` and `resume_iter = None`. After this, you can set `n_iter = 20` and `resume_iter = 10` to finish off the remaining 10 iterations.
 
-  - Set `serial_mode = False` to enable paralle evaluations.
+  - Set `serial_mode = False` to enable parallel evaluations.
 
 # Interpretation of results after running ProSRS
 
