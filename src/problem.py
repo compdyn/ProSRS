@@ -16,7 +16,7 @@ def gen_problem(prob_def):
         prob: an optim_prob class object that is ready to be fed into ProSRS algorithm.
     """
     # Vectorize output of objective function. This ensures that the output
-    # has type of numpy array, as it is required by ProSRS algorithm.
+    # has type of numpy array for compatibility with ProSRS algorithm.
     def object_func(x):
         y = prob_def.f(x)
         y = np.array(y)
@@ -31,8 +31,7 @@ def gen_problem(prob_def):
             self.y_var = prob_def.y_var
             self.dim = len(self.domain) # dimension of optimization problem
             assert(self.dim == len(self.x_var)), 'inconsistent dimension for x_var and domain'
-            self.object_func_list = [object_func] # a list of objective functions
-            self.eff_list = [1.] # a list of relative efficiency for different fidelities
+            self.object_func = object_func # objective function (corrupted with noise)
         
     prob = optim_prob()
     
@@ -64,7 +63,7 @@ class test_func:
             y: float, objective value at x.
         """
         x1, x2 = x
-        noise = np.random.normal(scale=0.1) # random noise
+        noise = np.random.normal(scale=0.02) # random noise
         y = x1**2+x2**2 # true function
         y += noise
         

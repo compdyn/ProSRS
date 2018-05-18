@@ -10,23 +10,22 @@ def main():
     
     ##################### Parameters #########################
     
-    # TODO: modify following parameters as needed
-    opt_iter = 20 # number of optimization iterations (total number of iterations for ProSRS = opt_iter+1, where 1 accounts for initial DOE iteration)
-    n_proc = 12 # number of processes for parallel optimization (>1, typically = number of processes of a compute node on a cluster)
-    resume_opt_iter = None # optimization iteration index to resume from (= "opt_iter" value from last run). If None, then we start from scratch.
+    # set parameters
+    n_iter = 30 # total number of iterations
+    n_proc = 12 # number of processes for parallel optimization (typically = number of available cores of a machine)
+    resume_iter = None # iteration to resume from (= 'n_iter' in last run). If None, then we run from scratch.
     seed = 1 # random seed for reproducibility
-    verbose = False # If True, progress of every iteration will be displayed at terminal as well as saved to file "{outdir}/std_out_log_{prob_name}.txt"
-    run_mode = 'local' # one of ['local','cluster']. 'local': run on a local machine; 'cluster': run on a cluster
+    save_samp = True # whether to save evaluations in each iteration
+    verbose = True # If True, progress of every iteration is displayed at terminal as well as saved to file "{outdir}/std_out_log_{prob_name}.txt"
+    serial_mode = True # whether to run in serial mode. If True, then surrogate building and function evaluations are performed in serial.
     outdir = '../result' # output directory where results will be saved
     
     ##################### End of Parameters #########################
     
     # sanity check
-    assert(run_mode in ['local','cluster'])
-    if resume_opt_iter is not None:
-        assert(0<=resume_opt_iter<opt_iter)
-    # determine whether we initiate serial mode
-    serial_mode = True if run_mode == 'local' else False
+    assert(type(serial_mode) is bool)
+    if resume_iter is not None:
+        assert(0<=resume_iter<=n_iter)
     # make output directory if it does not exist
     if not os.path.isdir(outdir):
         os.makedirs(outdir)
@@ -35,8 +34,8 @@ def main():
     prob = gen_problem(test_func()) # replace 'test_func' with the name of the imported problem class
     
     # run optimization algorithm
-    best_loc, best_val = run(prob, n_proc, outdir, opt_iter=opt_iter, seed=seed, verbose=verbose, 
-                             serial_mode=serial_mode, resume_opt_iter=resume_opt_iter)
+    best_loc, best_val = run(prob, n_iter, n_proc, outdir, seed=seed, save_samp=save_samp,
+                             verbose=verbose, serial_mode=serial_mode, resume_iter=resume_iter)
     
     # print optimization results
     print('\nbest point found:')
