@@ -16,7 +16,7 @@ def main():
     resume_iter = None # iteration to resume from (= 'n_iter' in last run). If None, then we run from scratch.
     seed = 1 # random seed for reproducibility
     save_samp = True # whether to save evaluations in each iteration
-    verbose = True # If True, progress of every iteration is displayed at terminal as well as saved to file "{outdir}/std_out_log_{prob_name}.txt"
+    verbose = False # If True, progress of every iteration is displayed at terminal as well as saved to file "{outdir}/std_out_log_{prob_name}.txt"
     serial_mode = True # whether to run in serial mode. If True, then surrogate building and function evaluations are performed in serial.
     outdir = '../result' # output directory where results will be saved
     
