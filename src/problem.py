@@ -1,5 +1,10 @@
 """
-This code defines optimization problems.
+Copyright (C) 2018 Chenchao Shou
+
+Licensed under Illinois Open Source License (see the file LICENSE). For more information
+about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-source-license.
+
+Define optimization problems.
 """
 
 import numpy as np

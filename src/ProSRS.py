@@ -1,7 +1,10 @@
 """
-This code implements Progressive Stochastic Response Surface (ProSRS) algorithm.
-
 Copyright (C) 2016-2018 Chenchao Shou
+
+Licensed under Illinois Open Source License (see the file LICENSE). For more information
+about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-source-license.
+
+This code implements Progressive Stochastic Response Surface (ProSRS) algorithm.
 """
 
 from __future__ import division, absolute_import
