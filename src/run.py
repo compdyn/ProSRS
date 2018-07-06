@@ -24,13 +24,11 @@ def main():
     seed = 1 # random seed for reproducibility
     save_samp = True # whether to save evaluations in each iteration
     verbose = False # If True, progress of every iteration is displayed at terminal as well as saved to file "{outdir}/std_out_log_{prob_name}.txt"
-    serial_mode = True # whether to run in serial mode. If True, then surrogate building and function evaluations are performed in serial.
     outdir = '../result' # output directory where results will be saved
     
     ##################### End of Parameters #########################
     
     # sanity check
-    assert(type(serial_mode) is bool)
     if resume_iter is not None:
         assert(0<=resume_iter<=n_iter)
     # make output directory if it does not exist
@@ -48,7 +46,7 @@ def main():
     
     # run optimization algorithm
     best_loc, best_val = run(prob, n_iter, n_proc, n_core_node, comm, outdir, seed=seed, save_samp=save_samp,
-                             verbose=verbose, serial_mode=serial_mode, resume_iter=resume_iter)
+                             verbose=verbose, resume_iter=resume_iter)
     
     # print optimization results
     if comm is None or comm.rank == 0:

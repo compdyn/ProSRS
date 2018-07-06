@@ -822,7 +822,7 @@ class std_err_logger(object):
         pass        
 
 def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1, save_samp=False, 
-        verbose=False, serial_mode=False, resume_iter=None):
+        verbose=False, resume_iter=None):
     
     """
     Run ProSRS optimization algorithm.
@@ -848,8 +848,6 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
         save_samp: boolean, whether to save samples for each iteration.
         
         verbose: boolean, whether to verbose about algorithm.
-        
-        serial_mode: boolean, whether to initiate serial mode. If True, then surrogate building and evaluation are done in serial.
     
         resume_iter: integer or None, starting iteration for resume (= 'n_iter' in last run). If None, then no resume.
     
@@ -922,12 +920,9 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
         assert(type(max_C_fail) == int and max_C_fail > 0)
         assert(n_cand_fact*dim >= n_proc), 'number of candidate points needs to be no less than n_proc'
         
-        if serial_mode:
-            pool_eval = pool_rbf = None
-        else:
-            # get pool of processes for parallel computing
-            pool_eval = Pool(processes=n_proc) # for function evaluations
-            pool_rbf = Pool(processes=n_core_node) # for training rbf surrogate
+        # get pool of processes for parallel computing
+        pool_eval = Pool(processes=n_proc) # for function evaluations
+        pool_rbf = Pool(processes=n_core_node) # for training rbf surrogate
             
         # sanity check
         assert(wgt_expon_delta >= 0 and max_reduce_step_size>=0 and 0<=init_gSRS_pct<=1)  
@@ -1171,8 +1166,8 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
     
             # sanity check for consistency of experiment conditions
             assert(init_iter==data['init_iter'] and n_proc==data['n_proc'] and seed==data['seed']
-                   and serial_mode==data['serial_mode'] and np.all(func_bd==data['func_bd']) 
-                   and n_cand_fact==data['n_cand_fact'] and alpha==data['alpha'] and n_core_node==data['n_core_node']
+                   and np.all(func_bd==data['func_bd']) and n_core_node==data['n_core_node']
+                   and n_cand_fact==data['n_cand_fact'] and alpha==data['alpha'] 
                    and normalize_data==data['normalize_data'] and init_wgt_expon==data['init_wgt_expon']
                    and wgt_expon_delta==data['wgt_expon_delta'] and max_reduce_step_size==data['max_reduce_step_size']
                    and box_fact==data['box_fact'] and np.all(init_step_size_fact_list==data['init_step_size_fact_list'])
@@ -1566,7 +1561,7 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
                      n_cand_fact=n_cand_fact,use_eff_n_samp=use_eff_n_samp,init_zoom_out_prob=init_zoom_out_prob,
                      normalize_data=normalize_data,init_wgt_expon=init_wgt_expon,wgt_expon_delta=wgt_expon_delta,
                      max_reduce_step_size=max_reduce_step_size,box_fact=box_fact,init_step_size_fact_list=init_step_size_fact_list,
-                     init_gSRS_pct=init_gSRS_pct,alpha=alpha,serial_mode=serial_mode,wgt_pat_bd=wgt_pat_bd,
+                     init_gSRS_pct=init_gSRS_pct,alpha=alpha,wgt_pat_bd=wgt_pat_bd,
                      log_std_out=log_std_out,log_std_err=log_std_err,sm_range=sm_range,log_opt=log_opt,
                      n_fold=n_fold,resol=resol,min_zoom_out_prob=min_zoom_out_prob,rbf_kernel=rbf_kernel,
                      func_bd=func_bd,max_C_fail=max_C_fail,resume_iter=resume_iter,n_iter=n_iter,
