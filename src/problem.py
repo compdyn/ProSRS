@@ -19,14 +19,7 @@ def gen_problem(prob_def):
         prob_def: an object that defines an optimization problem.
     Output:
         prob: an optim_prob class object that is ready to be fed into ProSRS algorithm.
-    """
-    # Vectorize output of objective function. This ensures that the output
-    # has type of numpy array for compatibility with ProSRS algorithm.
-    def object_func(x):
-        y = prob_def.f(x)
-        y = np.array(y)
-        return y
-          
+    """      
     class optim_prob:
         
         def __init__(self):
@@ -36,7 +29,7 @@ def gen_problem(prob_def):
             self.y_var = prob_def.y_var
             self.dim = len(self.domain) # dimension of optimization problem
             assert(self.dim == len(self.x_var)), 'inconsistent dimension for x_var and domain'
-            self.object_func = object_func # objective function (corrupted with noise)
+            self.object_func = prob_def.f # objective function (corrupted with noise)
         
     prob = optim_prob()
     
@@ -58,15 +51,18 @@ class test_func:
         self.y_var = 'y' # y variable name
         self.bounds = [(-3.,3.),(-3.,3.)] # problem domain (bound for each variable in self.var)
     
-    def f(self,x):
+    def f(self,x,seed=1):
         """
         Optimization objective function.
         
         Input:
             x: 1d array, input to objective function.
+            seed: int, random seed.
         Output:
             y: float, objective value at x.
         """
+        np.random.seed(seed) # set random seed for reproducibility
+        
         x1, x2 = x
         noise = np.random.normal(scale=0.02) # random noise
         y = x1**2+x2**2 # true function
@@ -88,12 +84,13 @@ class test_func:
 #        self.y_var = # y variable name
 #        self.bounds =  # problem domain (bound for each variable in self.var)
 #    
-#    def f(self,x):
+#    def f(self,x,seed=1):
 #        """
 #        Optimization objective function.
 #        
 #        Input:
 #            x: 1d array, input to objective function.
+#            seed: int, random seed.
 #        Output:
 #            y: float, objective value at x.
 #        """
