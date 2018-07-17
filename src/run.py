@@ -31,29 +31,34 @@ def main():
     # sanity check
     if resume_iter is not None:
         assert(0<=resume_iter<=n_iter)
-    # make output directory if it does not exist
-    if not os.path.isdir(outdir):
-        os.makedirs(outdir)
     # set MPI communicator
     if parallel_node:
         from mpi4py import MPI
         comm = MPI.COMM_WORLD  
     else:
         comm = None
+    # make output directory if it does not exist    
+    if comm is None or comm.rank == 0:
+        if not os.path.isdir(outdir):
+            os.makedirs(outdir)
         
     # TODO: generate an optimization problem that you would like to run (change the following line as needed)
     prob = gen_problem(test_func()) # replace 'test_func' with the name of the imported problem class
     
     # run optimization algorithm
-    best_loc, best_val = run(prob, n_iter, n_proc, n_core_node, comm, outdir, seed=seed, save_samp=save_samp,
-                             verbose=verbose, resume_iter=resume_iter)
-    
-    # print optimization results
     if comm is None or comm.rank == 0:
+        best_loc, best_val = run(prob, n_iter, n_proc, n_core_node, comm, outdir, seed=seed, save_samp=save_samp,
+                                 verbose=verbose, resume_iter=resume_iter)
+        
         print('\nbest point found:')
         print(', '.join(['%s = %g' % (x,v) for x,v in zip(prob.x_var, best_loc)]))
         print('(noisy) function value corresponding to the best point:')
         print('%s = %g' % (prob.y_var, best_val))
+        
+    else:
+        # i.e., comm.rank > 0
+        run(prob, n_iter, n_proc, n_core_node, comm, outdir, seed=seed, save_samp=save_samp,
+            verbose=verbose, resume_iter=resume_iter)
 
 if __name__ == '__main__':
     
