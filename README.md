@@ -1,18 +1,21 @@
 # Files in this directory
 
-  - `src/problem.py`: defines optimization problems.
-
-  - `src/ProSRS.py`: implements ProSRS algorithm. 
-
-  - `src/run.py`: runs ProSRS algorithm to solve optimization problems.
+  - [`benchmark`](benchmark): benchmarks ProSRS against Bayesian optimization algorithms.
    
+  - [`src/problem.py`](src/problem.py): defines optimization problems.
+
+  - [`src/ProSRS.py`](src/ProSRS.py): implements ProSRS algorithm. 
+
+  - [`src/run.py`](src/run.py): runs ProSRS algorithm to solve optimization problems.
+  
 # Installation
   
-  Required Python packages:
+  Python packages:
   
   - `sklearn`: http://scikit-learn.org/stable/install.html
   - `pyDOE`: https://pythonhosted.org/pyDOE/
   - `pathos`: https://pypi.python.org/pypi/pathos/0.2.0
+  - `mpi4py`: http://mpi4py.scipy.org (optional)
 
   For a quick sanity check of your installation, cd into `src` directory and type the following on the command line: 
   
@@ -47,14 +50,12 @@
 Below we give some general guidelines for setting parameters in `src/run.py`:
 
   - Generally speaking, set large `n_iter` for difficult problems.
-
-  - To take full advantage of ProSRS algorithm, generally set `n_proc` to be the number of cores of a machine.
+  
+  - Set `parallel_node` based on how you would like to evaluate your expensive tasks in parallel. ProSRS supports two parallel computing modes: parallelism across multiple nodes in a cluster environment (`parallel_node = True`) and parallelism of multiple cores within a node (`parallel_node = False`). You need to install `mpi4py` package if you turn on `parallel_node`.
 
   - Setting `resume_iter` to an integer allows you to resume from last run. In other words, you do not have to complete the optimization in one go:
      
      For example, to complete a run of `n_iter = 20`. You could first run the code with `n_iter = 10` and `resume_iter = None`. After this, you can set `n_iter = 20` and `resume_iter = 10` to finish off the remaining 10 iterations.
-
-  - Set `serial_mode = False` to enable parallel evaluations.
 
 # Interpretation of results after running ProSRS
 

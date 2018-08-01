@@ -1490,7 +1490,7 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
                             act_node_ix = 0
                             X_all = np.zeros((0,dim))
                             Y_all = np.zeros(0)
-                            tree = {n_zoom: [{'ix': np.arange(0,dtype=int), # indice of samples for the node (with respect to X_all_lf and Y_all_lf)
+                            tree = {n_zoom: [{'ix': np.arange(0,dtype=int), # indice of samples for the node (with respect to X_all and Y_all)
                                               'bd': func_bd, # domain of the node
                                               'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent
                                               'zp': init_zoom_out_prob, # zoom-out probability
