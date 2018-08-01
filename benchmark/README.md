@@ -8,11 +8,13 @@ Here each benchmark function is contaminated by Gaussian noise. The goal is to m
 
 ## Optimization performance
 
-[benchmark_opt_curve]
+![benchmark_opt_curve](https://user-images.githubusercontent.com/8780593/43497055-0b91aee8-9506-11e8-9b44-7a69bce9011b.png)
 
 The figure above shows the optimization progress versus the number of iterations. The objective function on the y axis is the evaluation of the underlying true expectation function (not the noisy function) at the proposed point in each iteration. The error bar is the standard deviation of 20 independent runs. The last numeric figure in the function name indicates the dimension of the problem (e.g., PowerSum4 is scalar function on R^4).
 
-[simple regret table]
+<p align="center">
+<img width="700" alt="simple regret table" src="https://user-images.githubusercontent.com/8780593/43497277-fa2d3608-9506-11e8-933c-fd6a9dbf49b0.png">
+</p>
 
 The table above summarizes the optimization performances in terms of the simple regrets. Here the simple regret is defined as the difference between the minimum true sample evaluation among all the iterations and the global minimum (i.e., the distance between the lowest point of an optimization curve and the global minimum).
 
@@ -20,7 +22,7 @@ As we can see from the optimization curves and the summary table above, our ProS
 
 ## Computational time of algorithms
 
-[benchmark_wall_time]
+![benchmark_wall_time](https://user-images.githubusercontent.com/8780593/43497271-f223927c-9506-11e8-92f6-710d63246c17.png)
 
 The figure above shows the cost of different optimization algorithms. The "wall time" here refers to the actual time that was consumed by an algorithm in each iteration, and does not include the time of parallel function evaluations. Since the first iteration was design of experiments, in which no optimization was run, the time measurement effectively started from the second iteration (this is why the x label in this figure is "Optimization iteration" instead of "Iteration" in the last figure, and it goes one less in total). The time was benchmarked on [Blue Waters](https://bluewaters.ncsa.illinois.edu) XE compute nodes. The error bar shows the standard deviation of 20 independent runs.
 
@@ -42,7 +44,7 @@ In this section, we give some insight into why our ProSRS algorithm performs bet
 
 ## Results
 
-[surrogate_performance]
+![surrogate_performance](https://user-images.githubusercontent.com/8780593/43497287-ff4f588c-9506-11e8-8bbc-86d46b528bbb.png)
 
 We can see from the figure above that cross-validated RBF regression (as used in our ProSRS method) generally produces a better model than those from GP regression (as used in the Bayesian optimization methods). Specifically, the RBF model from ProSRS is significantly better for the test functions Griewank, Levy, Goldstein and PowerSum, and is on par with GP models for Schaffer, Dropwave and Hartmann.
 
