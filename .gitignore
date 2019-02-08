@@ -3,3 +3,4 @@ src/__pycache__
 result/
 test/
 benchmark/surrogate_compare_result/
+.DS_Store
