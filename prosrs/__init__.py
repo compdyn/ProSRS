@@ -6,3 +6,4 @@ about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-so
 
 """
 from problem.problem import Problem
+from problem.benchmark import benchmark

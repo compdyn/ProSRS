@@ -4,7 +4,7 @@ Copyright (C) 2016-2019 Chenchao Shou
 Licensed under Illinois Open Source License (see the file LICENSE). For more information
 about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-source-license.
 
-Define optimization problem class.
+Defines optimization problem class.
 """
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,10 +13,13 @@ import warnings
 from ..utility.function import eval_func
 
 class Problem:
-        
-    def __init__(self, func, domain, x_var=None, y_var='y', name='demo', true_func=None, minima=None):
+    """
+    An optimization problem class that works with ProSRS algorithm.
+    """
+    def __init__(self, func, domain, x_var=None, y_var='y', name='demo', true_func=None, 
+                 min_loc=None, min_true_func=None):
         """
-        Constructor of optimization problem class.
+        Constructor. 
         
         Args:
             
@@ -40,9 +43,12 @@ class Problem:
                 `func` (i.e., expectation of function `func`). If None,
                 then the underlying true function is unknown.
             
-            minima (2d array or None, optional): Global minima points of function `true_func`.
-                Each row defines one minimum point. If None, then the minima points
-                are unknown.
+            min_loc (2d array or None, optional): Global minimum locations of function 
+                `true_func` on the `domain`. Each row defines one minimum point. 
+                If None, then the minimum locations are unknown.
+            
+            min_true_func (float or None, optional): Global minimum of function 
+                `true_func` on the `domain`. If None, then global minimum is unknown.
         
         Raises:
             
@@ -56,12 +62,13 @@ class Problem:
         self.y_var = y_var
         self.name = name
         self.F = true_func
-        self.minima = minima
+        self.min_loc = min_loc
+        self.min_true_func = min_true_func
         # sanity check
         if self.dim != len(self.x_var):
             raise ValueError('Inconsistent dimension for x_var and domain.')
-        if self.minima is not None:
-            assert(self.minima.shape[1] == self.dim), 'Wrong shape for minima.'
+        if self.min_loc is not None:
+            assert(self.min_loc.shape[1] == self.dim), 'Wrong shape for min_loc.'
     
     def __str__(self):
         """
@@ -73,12 +80,14 @@ class Problem:
         var_domain = {v:d for v,d in zip(self.x_var, self.domain)}
         line += '- Domain: %s\n' % str(var_domain)
         line += '- Y variable: %s\n' % str(self.y_var)
-        if self.minima is not None:
-            line += '- Minima points:\n %s\n' % str(self.minima)
+        if self.min_true_func is not None:
+            line += '- Global minimum: %g\n' % self.min_true_func
+        if self.min_loc is not None:
+            line += '- Global minimum locations:\n %s\n' % str(self.min_loc)
         return line
             
     def visualize(self, true_func=False, n_samples=None, plot_2d='contour', 
-                  contour_levels=100, minima_marker_size=20, n_proc=1, fig_path=None):
+                  contour_levels=100, min_marker_size=20, n_proc=1, fig_path=None):
         """
         Visualize optimization function (only if dimension of function is <= 2).
         
@@ -98,7 +107,7 @@ class Problem:
                 Useful only when `plot_2d` = 'contour'. For more explanation, see
                 `Matplotlib Document <https://matplotlib.org/api/_as_gen/matplotlib.pyplot.contourf.html>`.
             
-            minima_marker_size (int, optional): Marker size for global minima points.
+            min_marker_size (int, optional): Marker size for global minimum locations.
             
             n_proc (int, optional): Number of parallel processes for parallel function 
                 evaluations. If = 1, then optimization function is evaluated in serial.
@@ -132,9 +141,9 @@ class Problem:
                 X = np.linspace(self.domain[0][0], self.domain[0][1], n_samples).reshape((-1, 1))
                 Y = eval_func(plot_f, X, n_proc)
                 plt.plot(X, Y, 'b-')
-                if self.minima is not None:
-                    Ymin = np.array([plot_f(x) for x in self.minima])
-                    plt.plot(self.minima, Ymin, 'rx', markersize=minima_marker_size)
+                if self.min_loc is not None:
+                    Ymin = np.array([plot_f(x) for x in self.min_loc])
+                    plt.plot(self.min_loc, Ymin, 'rx', markersize=min_marker_size)
                 
             else: # i.e., self.dim == 2
                 
@@ -150,8 +159,8 @@ class Problem:
                 if plot_2d == 'contour':
                         
                     plt.contourf(x1, x2, Y, contour_levels)
-                    if self.minima is not None:    
-                        plt.plot(self.minima[:,0], self.minima[:,1], 'w.', markersize=minima_marker_size)
+                    if self.min_loc is not None:    
+                        plt.plot(self.min_loc[:,0], self.min_loc[:,1], 'w.', markersize=min_marker_size)
                     plt.colorbar()
                     plt.xlabel(self.x_var[0])
                     plt.ylabel(self.x_var[1])

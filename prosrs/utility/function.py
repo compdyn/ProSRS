@@ -4,7 +4,7 @@ Copyright (C) 2016-2019 Chenchao Shou
 Licensed under Illinois Open Source License (see the file LICENSE). For more information
 about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-source-license.
 
-Define utility functions.
+Defines utility functions.
 """
 import numpy as np
 from pathos.multiprocessing import ProcessingPool as Pool
