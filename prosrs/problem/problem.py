@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 import warnings
 from ..utility.function import eval_func
+from mpl_toolkits.mplot3d import Axes3D # needed for ``fig.add_subplot(111, projection='3d')``   
 
 class Problem:
     """
@@ -87,7 +88,7 @@ class Problem:
         return line
             
     def visualize(self, true_func=False, n_samples=None, plot_2d='contour', 
-                  contour_levels=100, min_marker_size=20, n_proc=1, fig_path=None):
+                  contour_levels=100, min_marker_size=10, n_proc=1, fig_path=None):
         """
         Visualize optimization function (only if dimension of function is <= 2).
         
@@ -138,11 +139,11 @@ class Problem:
             if self.dim == 1:
                 
                 n_samples = 20 if n_samples is None else n_samples
-                X = np.linspace(self.domain[0][0], self.domain[0][1], n_samples).reshape((-1, 1))
-                Y = eval_func(plot_f, X, n_proc)
+                X = np.linspace(self.domain[0][0], self.domain[0][1], n_samples)
+                Y = eval_func(plot_f, X.reshape((-1, 1)), n_proc)
                 plt.plot(X, Y, 'b-')
                 if self.min_loc is not None:
-                    Ymin = np.array([plot_f(x) for x in self.min_loc])
+                    Ymin = [plot_f(x) for x in self.min_loc]
                     plt.plot(self.min_loc, Ymin, 'rx', markersize=min_marker_size)
                 
             else: # i.e., self.dim == 2
@@ -153,7 +154,7 @@ class Problem:
                 x1 = np.linspace(self.domain[0][0], self.domain[0][1], n_samp_per_dim)
                 x2 = np.linspace(self.domain[1][0], self.domain[1][1], n_samp_per_dim)
                 x1, x2 = np.meshgrid(x1, x2)
-                X = np.hstack((x1.reshape(n_samples, 1), x2.reshape(n_samples, 1)))
+                X = np.hstack((x1.reshape((n_samples, 1)), x2.reshape((n_samples, 1))))
                 Y = eval_func(plot_f, X, n_proc).reshape((n_samp_per_dim, n_samp_per_dim))
                 
                 if plot_2d == 'contour':
@@ -168,7 +169,7 @@ class Problem:
                 
                 elif plot_2d == 'surface':
 
-                    ax = fig.add_subplot(111, projection='3d')    
+                    ax = fig.add_subplot(111, projection='3d')
                     ax.plot_surface(x1, x2, Y, rstride=1, cstride=1, cmap=cm.rainbow,
                                     linewidth=0, antialiased=False)
                     ax.axis('off')

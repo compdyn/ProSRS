@@ -52,11 +52,11 @@ def benchmark(func_name, domain=None, sd=None):
         
     elif func_name == 'Ackley10':
         sd = 1. if sd is None else sd
-        prob = benchmark_to_problem(Ackley(dim=10, domain), sd)
+        prob = benchmark_to_problem(Ackley(10, domain), sd)
         
     elif func_name == 'Alpine10':
         sd = 1. if sd is None else sd
-        prob = benchmark_to_problem(Alpine(dim=10, domain), sd)
+        prob = benchmark_to_problem(Alpine(10, domain), sd)
         
     elif func_name == 'Hartmann6':
         sd = 0.05 if sd is None else sd
@@ -64,19 +64,19 @@ def benchmark(func_name, domain=None, sd=None):
         
     elif func_name == 'Rastrigin2':
         sd = 0.5 if sd is None else sd
-        prob = benchmark_to_problem(Rastrigin(dim=2, domain), sd)
+        prob = benchmark_to_problem(Rastrigin(2, domain), sd)
         
     elif func_name == 'Griewank10':
         sd = 2. if sd is None else sd
-        prob = benchmark_to_problem(Griewank(dim=10, domain), sd)
+        prob = benchmark_to_problem(Griewank(10, domain), sd)
         
     elif func_name == 'Levy10':
         sd = 1. if sd is None else sd
-        prob = benchmark_to_problem(Levy(dim=10, domain), sd)
+        prob = benchmark_to_problem(Levy(10, domain), sd)
         
     elif func_name == 'SumPower10':
         sd = 0.05 if sd is None else sd
-        prob = benchmark_to_problem(SumPower(dim=10, domain), sd)
+        prob = benchmark_to_problem(SumPower(10, domain), sd)
         
     elif func_name == 'PowerSum':
         sd = 1. if sd is None else sd
@@ -134,7 +134,7 @@ class Schaffer:
         """
         self.domain = [(-100., 100.), (-100., 100.)] if domain is None else domain
         self.dim = len(self.domain)
-        self.min = [(0., 0.)] # global minimum locations
+        self.min = np.array([(0., 0.)]) # global minimum locations
         self.fmin = 0. # global minimum
         self.name = 'Schaffer'
         
@@ -182,7 +182,7 @@ class Goldstein:
         """
         self.domain = [(-2., 2.),(-2., 2.)] if domain is None else domain
         self.dim = len(self.domain)
-        self.min = [(0., -1.)] # global minimum locations
+        self.min = np.array([(0., -1.)]) # global minimum locations
         self.fmin = 3. # global minimum
         self.name = 'Goldstein'
     
@@ -236,7 +236,7 @@ class SixHumpCamel:
         """
         self.domain = [(-3., 3.), (-2., 2.)] if domain is None else domain
         self.dim = len(self.domain)
-        self.min = [(0.0898, -0.7126), (-0.0898, 0.7126)] # global minimum locations
+        self.min = np.array([(0.0898, -0.7126), (-0.0898, 0.7126)]) # global minimum locations
         self.fmin = -1.0316 # global minimum
         self.name = 'SixHumpCamel'
 
@@ -287,7 +287,7 @@ class DropWave:
         """
         self.domain = [(-5.12, 5.12), (-5.12, 5.12)] if domain is None else domain
         self.dim = len(self.domain)
-        self.min = [(0., 0.)] # global minimum locations
+        self.min = np.array([(0., 0.)]) # global minimum locations
         self.fmin = -1. # global minimum
         self.name = 'DropWave'
 
@@ -335,7 +335,7 @@ class Alpine:
         """
         self.dim = dim
         self.domain = [(-10., 10.)]*dim if domain is None else domain
-        self.min = [tuple([0.]*dim)] # global minimum locations
+        self.min = np.array([tuple([0.]*dim)]) # global minimum locations
         self.fmin = 0. # global minimum
         self.name = 'Alpine%d' % dim
     
@@ -383,7 +383,7 @@ class Ackley:
         """
         self.dim = dim
         self.domain =[(-32.768, 32.768)]*dim if domain is None else domain
-        self.min = [tuple([0.]*dim)] # global minimum locations
+        self.min = np.array([tuple([0.]*dim)]) # global minimum locations
         self.fmin = 0. # global minimum
         self.name = 'Ackley%d' % dim
 
@@ -430,7 +430,7 @@ class Hartmann6:
         """
         self.dim = 6
         self.domain =[(0., 1.)]*self.dim if domain is None else domain
-        self.min = [(0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573)] # global minimum locations
+        self.min = np.array([(0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.6573)]) # global minimum locations
         self.fmin = -3.32237 # global minimum
         self.name = 'Hartmann6'
         
@@ -489,7 +489,7 @@ class Rastrigin:
         """
         self.dim = dim
         self.domain =[(-5.12, 5.12)]*dim if domain is None else domain
-        self.min = [tuple([0.]*dim)] # global minimum locations
+        self.min = np.array([tuple([0.]*dim)]) # global minimum locations
         self.fmin = 0. # global minimum
         self.name = 'Rastrigin%d' % dim
         
@@ -514,7 +514,7 @@ class Rastrigin:
         if x.shape != (self.dim, ):
             raise ValueError('Wrong dimension for x.')
         # evaluate the function
-        fval = 10*self.dim+np.sum(x**2-10*np.cos(2*np.pi*x))
+        y = 10*self.dim+np.sum(x**2-10*np.cos(2*np.pi*x))
         
         return y
 
@@ -537,7 +537,7 @@ class Griewank:
         """
         self.dim = dim
         self.domain =[(-600., 600.)]*dim if domain is None else domain
-        self.min = [tuple([0.]*dim)] # global minimum locations
+        self.min = np.array([tuple([0.]*dim)]) # global minimum locations
         self.fmin = 0. # global minimum
         self.name = 'Griewank%d' % dim
         
@@ -587,7 +587,7 @@ class Levy:
         """
         self.dim = dim
         self.domain =[(-10., 10.)]*dim if domain is None else domain
-        self.min = [tuple([1.]*dim)] # global minimum locations
+        self.min = np.array([tuple([1.]*dim)]) # global minimum locations
         self.fmin = 0. # global minimum
         self.name = 'Levy%d' % dim
         
@@ -642,7 +642,7 @@ class SumPower:
         """
         self.dim = dim
         self.domain =[(-1., 1.)]*dim if domain is None else domain
-        self.min = [tuple([0.]*dim)] # global minimum locations
+        self.min = np.array([tuple([0.]*dim)]) # global minimum locations
         self.fmin = 0. # global minimum
         self.name = 'SumPower%d' % dim
         
@@ -688,7 +688,7 @@ class PowerSum:
         """
         self.dim = 4
         self.domain =[(0., 4.)]*self.dim if domain is None else domain
-        self.min = [(1., 2., 2., 3.)] # global minimum locations
+        self.min = np.array([(1., 2., 2., 3.)]) # global minimum locations
         self.fmin = 0. # global minimum
         self.name = 'PowerSum'
         
