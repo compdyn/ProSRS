@@ -8,8 +8,9 @@ Defines utility functions.
 """
 import numpy as np
 from pathos.multiprocessing import ProcessingPool as Pool
+from timeit import default_timer
 
-def eval_func(func, pts, n_proc=1):
+def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
     """
     Evaluate function in serial/parallel.
     
@@ -24,8 +25,15 @@ def eval_func(func, pts, n_proc=1):
         
         pts (2d array): Points to be evaluated. Each point is one row of `pts`.
         
-        n_proc (int, optional): number of processes used for evaluation. If
+        n_proc (int, optional): Number of processes used for evaluation. If
             = 1, we evaluate `pts` in serial.
+            
+        seeds (list or None, optional): Random seed for each point in `pts`.
+            If None, then no random seed will be set for any evaluation.
+        
+        save_files (list or None): Specify ``.npz`` file where each evaluation will be saved.
+            If None, then no evaluation will be saved. It may be helpful to save evaluations
+            for debugging purposes.
     
     Returns:
         
@@ -34,15 +42,58 @@ def eval_func(func, pts, n_proc=1):
     Raises:
         
         ValueError: If n_proc is less than 1.
-    """
+    """ 
+    def eval_wrapper(arg):
+        """
+        A wrapper for evaluating the function `func`.
+        
+        Args:
+            
+            arg (tuple): Function argument = (pt, seed, save_file) with
+            
+                pt (1d array): A point to be evaluated.
+            
+                seed (int or None): Random seed for the evaluation. 
+                    If None, then no random seed will be set for the evaluation.
+            
+                save_file (str or None): Specify ``.npz`` file where the evaluation will be saved.
+                    If None, then the evaluation will not be saved.
+        
+        Returns:
+            
+            val (float): Function value at the point `pt`.
+        """
+        # parse argument
+        pt, seed, save_file = arg
+        
+        if seed is not None:
+            np.random.seed(seed) # set random seed
+        
+        t1 = default_timer()
+        val = func(pt)
+        t2 = default_timer()
+        eval_time = t2-t1 # elapsed time for the evaluation
+        
+        if save_file is not None:
+            np.savez(save_file, pt=pt, val=val, seed=seed, eval_time=eval_time)
+        
+        return val
+        
+    n_pts = pts.shape[0]
+    seeds = [None]*n_pts if seeds is None else seeds
+    save_files = [None]*n_pts if save_files is None else save_files
+    # sanity check
+    assert(len(seeds) == len(save_files) == n_pts)
     assert(callable(func)), 'func is not callable.'
+    
     if n_proc == 1:
-        vals = np.array([func(x) for x in pts])  
+        vals = np.array([eval_wrapper(x) for x in zip(pts, seeds, save_files)])
     elif n_proc > 1:
         pool = Pool(processes=int(n_proc))
-        vals = np.array(pool.map(func, pts))
+        vals = np.array(pool.map(eval_wrapper, list(zip(pts, seeds, save_files))))
     else:
         raise ValueError('Invalid n_proc value.')
+    # sanity check
     assert(vals.ndim == 1), 'vals should be 1d numpy array.'
        
     return vals

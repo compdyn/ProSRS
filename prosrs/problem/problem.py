@@ -140,7 +140,7 @@ class Problem:
                 
                 n_samples = 20 if n_samples is None else n_samples
                 X = np.linspace(self.domain[0][0], self.domain[0][1], n_samples)
-                Y = eval_func(plot_f, X.reshape((-1, 1)), n_proc)
+                Y = eval_func(plot_f, X.reshape((-1, 1)), n_proc=n_proc)
                 plt.plot(X, Y, 'b-')
                 if self.min_loc is not None:
                     Ymin = [plot_f(x) for x in self.min_loc]
@@ -155,7 +155,7 @@ class Problem:
                 x2 = np.linspace(self.domain[1][0], self.domain[1][1], n_samp_per_dim)
                 x1, x2 = np.meshgrid(x1, x2)
                 X = np.hstack((x1.reshape((n_samples, 1)), x2.reshape((n_samples, 1))))
-                Y = eval_func(plot_f, X, n_proc).reshape((n_samp_per_dim, n_samp_per_dim))
+                Y = eval_func(plot_f, X, n_proc=n_proc).reshape((n_samp_per_dim, n_samp_per_dim))
                 
                 if plot_2d == 'contour':
                         
