@@ -13,6 +13,7 @@ import warnings
 from ..utility.function import eval_func
 from mpl_toolkits.mplot3d import Axes3D # needed for ``fig.add_subplot(111, projection='3d')``   
 
+
 class Problem:
     """
     An optimization problem class that works with ProSRS algorithm.

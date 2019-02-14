@@ -10,6 +10,7 @@ import numpy as np
 from pathos.multiprocessing import ProcessingPool as Pool
 from timeit import default_timer
 
+
 def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
     """
     Evaluate function in serial/parallel.
@@ -89,7 +90,7 @@ def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
     if n_proc == 1:
         vals = np.array([eval_wrapper(x) for x in zip(pts, seeds, save_files)])
     elif n_proc > 1:
-        pool = Pool(processes=int(n_proc))
+        pool = Pool(nodes=int(n_proc))
         vals = np.array(pool.map(eval_wrapper, list(zip(pts, seeds, save_files))))
     else:
         raise ValueError('Invalid n_proc value.')
@@ -97,3 +98,32 @@ def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
     assert(vals.ndim == 1), 'vals should be 1d numpy array.'
        
     return vals
+
+
+def unique_row(array):
+    """
+    Sort a 2d array row-wise and get unique rows of it.
+    
+    Note: experiments show that this function produces results faster than ``np.unique`` method,
+    especially when the number of rows of the array is large.
+    
+    Args:
+        
+        array (2d array): Array to get unique rows from
+    
+    Returns:
+    
+        unique_arr (2d array): Sorted array of unique rows. If `array` is empty (i.e.,
+            ``array.shape = (0,0)``), then the empty `array` will be returned.
+    """
+    # sanity check
+    assert(array.ndim == 2)
+    
+    if array.size > 0: # i.e. non-empty        
+        
+        sorted_arr =  array[np.lexsort(array.T),:]
+        # get unique rows
+        row_ix = np.append([True], np.any(np.diff(sorted_arr, axis=0), axis=1))
+        unique_arr = sorted_arr[row_ix]
+        
+    return unique_arr

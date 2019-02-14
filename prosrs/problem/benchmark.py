@@ -8,7 +8,8 @@ Contains optimization benchmark problems.
 """
 import numpy as np
 from .problem import Problem
-    
+
+
 def benchmark(func_name, domain=None, sd=None):
     """
     Generate an optimization benchmark problem.
