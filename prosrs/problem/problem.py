@@ -4,7 +4,7 @@ Copyright (C) 2016-2019 Chenchao Shou
 Licensed under Illinois Open Source License (see the file LICENSE). For more information
 about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-source-license.
 
-Defines optimization problem class.
+Define optimization problem class.
 """
 import numpy as np
 import matplotlib.pyplot as plt

@@ -4,7 +4,7 @@ Copyright (C) 2016-2019 Chenchao Shou
 Licensed under Illinois Open Source License (see the file LICENSE). For more information
 about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-source-license.
 
-Defines utility functions.
+Define utility functions.
 """
 import numpy as np
 from pathos.multiprocessing import ProcessingPool as Pool
@@ -13,7 +13,7 @@ from timeit import default_timer
 
 def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
     """
-    Evaluate function in serial/parallel.
+    Evaluate a function in serial/parallel.
     
     Here we assume that parallelism takes place across multiple cores of a machine,
     and the Python package `pathos <https://pypi.org/project/pathos/0.2.0>` has 
