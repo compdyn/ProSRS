@@ -145,7 +145,7 @@ class Rbf(object):
         self.smooth = kwargs.pop('smooth', 0.0)
         self.function = kwargs.pop('function', 'multiquadric')        
         
-        assert(self.smooth > 0),'smooth parameter needs to be positive'
+        assert(self.smooth > 0),'smoothing parameter needs to be positive'
         self.use_scipy_rbf = kwargs.pop('use_scipy_rbf', False)
         self.suppress_warning = kwargs.pop('suppress_warning', True)
         self.wgt = kwargs.pop('wgt',np.ones(self.N)) # weight vector        
@@ -175,7 +175,7 @@ class Rbf(object):
                    phi = np.hstack((phi,np.ones((self.N,1))))
                 self.A = np.dot(np.dot(phi.T,W),phi)+np.eye(phi.shape[1])*self.smooth
                 self.b = np.dot(np.dot(phi.T,W),self.di)
-                # since smooth parameter is positive, A must be positive definite.
+                # since smoothing parameter is positive, A must be positive definite.
                 # so we can set sym_pos=True when solving with linalg.solve
                 self.nodes = linalg.solve(self.A,self.b,sym_pos=True,lower=True)
 
@@ -218,7 +218,7 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
         
         Y (1d array): (Noisy) function evaluation of each point in `X`.
         
-        sm_range (list or tuple or float): Range of smoothing parameter.
+        sm_range (list or tuple or float): Range of smoothing parameter (L2 regularization parameter).
             If ``list`` or ``tuple``, then `sm_range` = [lower bound, upper bound].
             The value of the smoothing parameter will be determined via a cross validation procedure
             on the domain `sm_range`. If ``float``, then the smoothing parameter is equal to
@@ -231,7 +231,7 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
         
         use_scipy_rbf (bool, optional): Whether to use Scipy implementation for the RBF model.
         
-        log_opt (bool, optional): Whether to optimize the smooth parameter on a log scale 
+        log_opt (bool, optional): Whether to optimize the smoothing parameter on a log scale 
             during cross validation.
         
         
@@ -255,9 +255,9 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
         
         rbf_mod (callable): RBF regression model.
         
-        opt_sm (float): (Optimal) smooth parameter found through cross validation.
+        opt_sm (float): (Optimal) smoothing parameter found through cross validation.
         
-        cv_err (list or None): cross validated error for each smooth parameter sample.
+        cv_err (list or None): cross validated error for each smoothing parameter sample.
             If None, then there is no cross validation.
         
         rbf_obj (`Rbf` type or None): Original RBF instance before normalization. 
@@ -288,7 +288,7 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
             n_iter = int(np.ceil(n_min_sm/float(n_proc))) # number of iterations
             n_req = n_proc*n_iter # total number of requested points
             assert(n_req >= n_min_sm > 0) # sanity check
-            # find candidate smooth parameters
+            # find candidate smoothing parameters
             if log_opt:
                 smooth = np.logspace(np.log10(sm_lw), np.log10(sm_up), n_req)
             else:
@@ -302,7 +302,7 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
                 CV_smooth_partial = partial(CV_smooth, X=X, Y=Y, n_fold=n_fold, kernel=kernel,
                                             use_scipy_rbf=use_scipy_rbf, wgt_expon=wgt_expon, poly_deg=poly_deg)        
                 cv_err = pool.map(CV_smooth_partial, smooth, chunksize=n_iter)
-            # find smooth parameter that has the lowest cross-validated error
+            # find smoothing parameter that has the lowest cross-validated error
             opt_ix = np.argmin(cv_err)
             opt_sm = smooth[opt_ix]
             
@@ -310,7 +310,7 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
             opt_sm = sm_range[0]
             cv_err = None
             
-        # then we build RBF surrogate with the optimal smooth parameter using all the data
+        # then we build RBF surrogate with the optimal smoothing parameter using all the data
         XY_data = np.vstack((X.T, Y.reshape((1, -1))))
         if not use_scipy_rbf:
             wgt = rbf_wgt(Y, wgt_expon)
@@ -419,7 +419,7 @@ def CV_smooth(smooth, X, Y, n_fold, kernel, use_scipy_rbf, wgt_expon, poly_deg):
      
      Args:
          
-         smooth (float): smoothing parameter.
+         smooth (float): Smoothing parameter (L2 regularization constant).
          
          X (2d array): X values of training data. Each row is one point.
          
