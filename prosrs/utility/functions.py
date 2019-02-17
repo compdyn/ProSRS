@@ -90,7 +90,8 @@ def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
     if n_proc == 1:
         vals = np.array([eval_wrapper(x) for x in zip(pts, seeds, save_files)])
     elif n_proc > 1:
-        pool = Pool(nodes=int(n_proc))
+        assert(type(n_proc) is int)
+        pool = Pool(nodes=n_proc)
         vals = np.array(pool.map(eval_wrapper, list(zip(pts, seeds, save_files))))
     else:
         raise ValueError('Invalid n_proc value.')
@@ -127,3 +128,4 @@ def unique_row(array):
         unique_arr = sorted_arr[row_ix]
         
     return unique_arr
+ 

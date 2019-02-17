@@ -7,15 +7,21 @@ about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-so
 Implement ProSRS algorithm.
 """
 import numpy as np
+import os, sys
 from pyDOE import lhs
+from pathos.multiprocessing import ProcessingPool as Pool
+from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP
+from ..utility.classes import std_out_logger, std_err_logger
 #TODO: change 'processes=' to 'nodes=' for pool initialization.
 #TODO: change 'wgt_expon' to 'gamma'. "wgt_expon = - gamma". Change rbf_wgt() and optimizer function accordingly.
+
 
 class Optimizer:
     """
     A class that handles optimization using ProSRS algorithm.
     """
-    def __init___(self, prob, n_worker, n_proc_master=None, seed=1, out_dir='out'):
+    def __init___(self, prob, n_worker, n_proc_master=None, n_iter=None, n_restart=2, resume=False, 
+                  seed=1, out_dir='out'):
         """
         Constructor.
         
@@ -30,8 +36,19 @@ class Optimizer:
             n_proc_master (int or None, optional): Number of parallel processes (cores)
                 that will be used in the master node. If None, then all the available
                 processes (cores) of the master will be used.
+                
+            n_iter (int or None, optional): Total number of iterations for the optimization.
+                If ``int``, the optimization will terminate upon finishing running `n_iter` iterations. 
+                If None, then we use number of restarts `n_restart` as the termination condition.
+                
+            n_restart (int, optional): Total number of restarts for the optimization.
+                This parameter takes effect only when `n_iter` is None, and 
+                the optimization will terminate upon finishing restarting `n_restart` times.
             
-            seed (int or None, optional): Random seed.
+            resume (bool, optional): Whether to resume from the last run.
+                The information of the last run will be read from the directory `out_dir`.
+            
+            seed (int or None, optional): Random seed for the optimizer.
                 If None, then we do not set random seed for the optimization.
             
             out_dir (str, optional): Output directory.
@@ -39,9 +56,15 @@ class Optimizer:
                 `out_dir` directory.
         """
         # class members (convention: variables wih prefix '_' are constant parameters during optimization).
+        self._prob = prob # optimization problem
         self._dim = prob.dim # dimention of optimization problem.
-        self._domain = prob.domain # domain of optimization problem.
         self._n_worker = n_worker # number of workers.
+        self._n_proc_master = n_proc_master # number of parallel processes in the master node.
+        self._n_iter = n_iter # total number of iterations.
+        self._n_restart = n_restart # total number of restarts.
+        self._resume = resume # whether to resume from the last run.
+        self._seed = seed # random seed for the optimizer.
+        self._out_dir = out_dir # output directory.
         self._n_cand_fact = 1000 # number of candidate = self._n_cand_fact * self._dim.
         self._wgt_pat_bd = [0.3, 1.] # the bound of the weight pattern in the SRS method.
         self._normalize_data = True # whether to normalize data when training RBF regression model.
@@ -61,9 +84,56 @@ class Optimizer:
         self._resol = 0.01 # resolution parameter for restart.
         self._use_eff_n_samp = True # whether to use effective number of samples for the dynamics of p value.
         self._max_C_fail = max(2, int(np.ceil(self._dim/float(self._n_worker)))) # maximum number of consecutive failures before halving self.sigma value.
-        self._n_iter_doe = int(np.ceil(3/float(self._n_worker))) # default number of iterations for DOE.
-        # TODO: sanity check for class members
+        self._n_iter_doe = min(self._n_iter, int(np.ceil(3/float(self._n_worker)))) # default number of iterations for DOE.
+        self._n_cand = self._n_cand_fact * self._dim # number of candidate points in SRS method
+        self._state_npz_file = os.path.join(self._out_dir, STATE_NPZ_FILE_TEMP % self._prob.name) # file that saves optimizer state (useful for resume)
+        self._state_pkl_file = os.path.join(self._out_dir, STATE_PKL_FILE_TEMP % self._prob.name) # file that saves optimizer state (useful for resume)
         
+        # sanity check
+        # TODO: check the type of `self._prob`
+        assert(type(self._n_worker) is int and self._n_worker > 0)
+        assert(type(self._n_proc_master) is int and self._n_proc_master > 0)
+        assert(0 <= self._wgt_pat_bd[0] <= self._wgt_pat_bd[1] <= 1 and len(self._wgt_pat_bd) == 2)
+        assert(self._delta_gamma >= 0)
+        assert(type(self._max_n_reduce_sigma) is int and self._max_n_reduce_sigma >= 0)
+        assert(0 < self._rho < 1)
+        assert(0 <= self._init_p <= 1)
+        assert(0 <= self._min_beta <= self._init_beta <= 1)
+        assert(self._alpha > 0)
+        assert(0 < self._lambda_range[0] <= self._lambda_range[1] and len(self._lambda_range) == 2)
+        assert(type(self._rbf_poly_deg) is int and self._rbf_poly_deg in [0, 1])
+        assert(type(self._n_fold) is int and self._n_fold > 1)
+        assert(0 < self._resol < 1)
+        assert(type(self._max_C_fail) is int and self._max_C_fail > 0)
+        assert(type(self._n_iter_doe) is int and self._n_iter_doe > 0)
+        assert(type(self._n_cand) is int and self._n_cand >= self._n_worker)
+        if type(self._n_iter) is int:
+            assert(self._n_iter > 0)
+        else:
+            assert(self._n_iter is None), 'n_iter is either an integer or None.'
+        assert(type(self._n_restart) is int and self._n_restart > 0)
+        
+        # create output directory, if not existent
+        if not os.path.isdir(self._out_dir):
+            os.makedirs(self._out_dir)
+        
+        # initialize the state of the optimizer
+        if not self._resume:
+            self.i_iter = 0 # iteration index (how many iterations have been run)
+            self.i_restart = 0 # restart index (how many restarts have been initiated)
+            self.remain_doe_samp = np.zeros((0, self._dim)) # remaining DOE samples
+            self.i_iter_doe = 0 # iteration index during DOE phase (how many DOE iterations have been run in current cycle)
+            self.t_build_mod = np.zeros(0) # time of building a RBF model for each iteration. If an iteration is DOE, = np.nan.  
+            self.t_prop_pt = np.zeros(0) # time of proposing new points for each iteration.
+            self.t_eval_pt = np.zeros(0) # time of evaluating proposed points for each iteration.
+            self.t_update = np.zeros(0) # time of updating the optimizer state for each iteration.
+            # TODO: to be continued
+        
+        else:
+            # load optimizer state from the last run
+            self.load_state()
+            
+        # TODO: to be continued
         
         
         
@@ -78,127 +148,61 @@ class Optimizer:
                 the more detailed information will be displayed.
         """
     
-    def visualize(self, fig_paths={'optim_curve': None, 'zoom_level': None, 'time': None}):
-        """
-        Visualize optimization progress.
-        
-        Args:
-            
-            fig_paths (dict, optional): Paths where the plots will be saved.
-                The keys of `fig_paths` are the types of plots. The values
-                of the keys are paths to be saved. If the value of a key is None 
-                or the key does not exist, a plot will be shown but no figure 
-                will be saved for the plot. If the value of a key is specified,
-                then a plot will be shown, and will be saved to this key value.
-        """
-    
-    def run(self, n_iter=None, n_restart=2, resume=False, verbose=True, std_out_file=None, std_err_file=None):
+    def run(self, verbose=True, std_out_file=None, std_err_file=None):
         """
         Run ProSRS algorithm.
         
         Args:
-            
-            n_iter (int or None, optional): Total number of iterations for the optimization.
-                If ``int``, the optimization will terminate upon finishing running `n_iter` iterations. 
-                If None, then we use number of restarts `n_restart` as the termination condition.
-                
-            n_restart (int, optional): Number of restarts for the optimization.
-                This parameter takes effect only when `n_iter` is None, and 
-                the optimization will terminate upon finishing restarting `n_restart` times.
-            
-            resume (bool, optional): Whether to resume from the last run.
-                The information of the last run will be read from the directory `self.out_dir`.
                 
             verbose (bool, optional): Whether to verbose while running the algorithm.
             
-            std_out_file (str or None, optional): Name of standard output file name.
-                If ``str``, then standard outputs will be directed to the file {self.out_dir}/{std_out_file}.
+            std_out_file (str or None, optional): Standard output file path.
+                If ``str``, then standard outputs will be directed to the file `std_out_file`.
                 If None, then standard outputs will not be saved to a file.
             
-            std_err_file (str or None, optional): Name of standard error file name.
-                If ``str``, then standard errors will be directed to the file {self.out_dir}/{std_err_file}.
+            std_err_file (str or None, optional): Standard error file path.
+                If ``str``, then standard errors will be directed to the file `std_err_file`.
                 If None, then standard errors will not be saved to a file.
             
         """
-    
-        ############## Algorithm parameters (global constants) ####################
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        # TODO: continue from here
-        
-        
-        # convert input to correct data type if not done so
-        n_iter = int(n_iter)
-        init_iter = min(n_iter, self._n_iter_doe)
-        opt_iter = n_iter-init_iter # number of iterations for optimization
-        n_proc = int(n_proc)
-        n_core_node = int(n_core_node)
-        seed = int(seed)
-        assert(seed >= 0 and n_core_node > 0 and n_proc > 0)
-        
-        # get parameters of optimization problem
-        dim = prob.dim
-        func_bd = prob.domain
-        obj_func = prob.object_func # objective function (corrupted with noise)
-        prob_name = prob.prob_name
-        
-        # get file and directory names
-        result_npz_file = os.path.join(outdir, RESULT_NPZ_FILE_TEMP % prob_name)
-        result_pkl_file = os.path.join(outdir, RESULT_PKL_FILE_TEMP % prob_name)
-        
-        # get lower and upper bounds for function
-        func_lb, func_ub = zip(*func_bd)
-        func_lb, func_ub = np.array(func_lb), np.array(func_ub) # convert to numpy array
-        assert(np.all(func_lb<func_ub)) # sanity check
-        func_blen = func_ub-func_lb # function bound length for each dimension
-        # get number of candidate points
-        n_cand = int(n_cand_fact*dim)        
-        assert(type(max_C_fail) == int and max_C_fail > 0)
-        assert(n_cand_fact*dim >= n_proc), 'number of candidate points needs to be no less than n_proc'
-        
-        # get pool of processes for parallel computing
-        pool_eval = Pool(processes=n_proc) # for function evaluations
-        pool_rbf = Pool(processes=n_core_node) # for training rbf surrogate
+        self._verbose = verbose
+        self._std_out_file = std_out_file
+        self._std_err_file = std_err_file
             
-        # sanity check
-        assert(delta_gamma >= 0 and max_n_reduce_sigma>=0 and 0<=init_p<=1)  
-        assert(0<rho<1 and resol>0)
-        assert(0<=min_beta<=init_beta<=1)
-        assert(n_fold > 1)
-        assert(rbf_poly_deg in [0,1])
-        assert(min(wgt_pat_bd)>=0 and max(wgt_pat_bd)<=1 and len(wgt_pat_bd)==2)
+        # Log standard outputs and standard errors to files
+        # Here we write to a new file if we do not resume. Otherwise, we append to the old file.
+        if self._std_out_file is not None:
+            if not self._resume:
+                if os.path.isfile(self._std_out_file):
+                    os.remove(self._std_out_file)
+            sys.stdout = std_out_logger(self._std_out_file)    
+        if self._std_err_file is not None:
+            if not self._resume:
+                if os.path.isfile(self._std_err_file):
+                    os.remove(self._std_err_file)
+            sys.stderr = std_err_logger(self._std_err_file)
         
-        # check if the output directory exists
-        assert(os.path.isdir(outdir))
+        # main loop
+        while not self.is_done():
             
-        # log standard outputs/errors to file
-        if std_out_file is not None:
-            orig_std_out = sys.stdout
-            log_file = os.path.join(outdir, std_out_file)
-            if resume_iter is None:
-                if os.path.isfile(log_file):
-                    os.remove(log_file)
-            sys.stdout = std_out_logger(log_file)    
-        if std_err_file is not None:
-            orig_std_err = sys.stderr
-            log_file = os.path.join(outdir, std_err_file)
-            if resume_iter is None:
-                if os.path.isfile(log_file):
-                    os.remove(log_file)
-            sys.stderr = std_err_logger(log_file)
+            # TODO: to be continued
+            
+            # propose new points
+            
+            if verbose:
+                pass 
+            
+            # evaluate proposed points
+            
+            if verbose:
+                pass
+            
+            # update optimizer state (also save the state)
+            
+            if verbose:
+                pass
+            
+        
         
         ########################### Functions ###############################
         
@@ -280,12 +284,7 @@ class Optimizer:
         
         ########################### Main program ############################
         
-        # initializations
-        t_build_mod, t_build_mod_cpu = np.zeros(opt_iter), np.zeros(opt_iter) 
-        t_prop_pt, t_prop_pt_cpu = np.zeros(opt_iter), np.zeros(opt_iter)  
-        t_eval_prop, t_eval_prop_cpu = np.zeros(opt_iter), np.zeros(opt_iter) 
-        t_opt, t_opt_cpu = np.zeros(opt_iter), np.zeros(opt_iter)
-        t_prep, t_prep_cpu = np.zeros(opt_iter), np.zeros(opt_iter)
+        
         opt_sm_arr = np.nan*np.ones(opt_iter) # save optimal smooth parameter
         cv_err_arr = [None]*opt_iter # save cv error for each iteration
         gSRS_pct_arr = np.zeros(opt_iter) # save gSRS_pct in each iteration
@@ -301,21 +300,17 @@ class Optimizer:
             np.random.seed(int(seed))
             
             t1 = default_timer()
-            t1_c = clock()
             
             n_init_samp = n_proc*init_iter
             X_all = doe(n_init_samp,func_bd)
                 
             t2 = default_timer()
-            t2_c = clock()
             
             t_doe = t2-t1
-            t_doe_cpu = t2_c-t1_c
             
             ########### Evaluate DOE ################
             
             t_eval = np.zeros(init_iter)
-            t_eval_cpu = np.zeros(init_iter)
             
             seed_base = seed+1
             seed_flat_arr = np.array([])
@@ -330,11 +325,11 @@ class Optimizer:
                 seed_base += n_proc
                 out_list = [os.path.join(outdir, RESULT_SAMP_FILE_TEMP % (prob_name,k+1,n+1)) \
                             for n in range(n_proc)]
-                t1, t1_c = default_timer(), clock()
+                t1 = default_timer()
                 # evaluate function
                 Y = func_eval(obj_func,X,seed_arr,out_list,pool_eval,comm)
-                t2, t2_c = default_timer(), clock()
-                t_eval[k], t_eval_cpu[k] = t2-t1, t2_c-t1_c
+                t2 = default_timer()
+                t_eval[k] = t2-t1
                 # get best value and best location for each iteration
                 min_ix = np.argmin(Y)
                 best_loc_it[k],best_val_it[k] = X[min_ix],Y[min_ix]
@@ -358,12 +353,8 @@ class Optimizer:
                         nc_seed[:] = seed_arr
                         nc_wall_time = f.createVariable('tw_eval','d',())
                         nc_wall_time.assignValue(t_eval[k])
-                        nc_cpu_time = f.createVariable('tc_eval','d',())
-                        nc_cpu_time.assignValue(t_eval_cpu[k])
                         nc_wall_time = f.createVariable('tw_doe','d',())
                         nc_wall_time.assignValue(t_doe)
-                        nc_cpu_time = f.createVariable('tc_doe','d',())
-                        nc_cpu_time.assignValue(t_doe_cpu)
             
             # sanity check
             assert(np.all(seed_flat_arr == np.arange(np.min(seed_flat_arr),np.max(seed_flat_arr)+1)))
@@ -435,15 +426,9 @@ class Optimizer:
             
             # read optimization results from previous experiment
             t_build_mod[:resume_opt_iter] = data['t_build_mod']
-            t_build_mod_cpu[:resume_opt_iter] = data['t_build_mod_cpu']
             t_prop_pt[:resume_opt_iter] = data['t_prop_pt']
-            t_prop_pt_cpu[:resume_opt_iter] = data['t_prop_pt_cpu']
-            t_eval_prop[:resume_opt_iter] = data['t_eval_prop']
-            t_eval_prop_cpu[:resume_opt_iter] = data['t_eval_prop_cpu']
-            t_opt[:resume_opt_iter] = data['t_opt']
-            t_opt_cpu[:resume_opt_iter] = data['t_opt_cpu']
-            t_prep[:resume_opt_iter] = data['t_prep']
-            t_prep_cpu[:resume_opt_iter] = data['t_prep_cpu']
+            t_eval_pt[:resume_opt_iter] = data['t_eval_pt']
+            t_update[:resume_opt_iter] = data['t_update']
             opt_sm_arr[:resume_opt_iter] = data['opt_sm_arr']
             cv_err_arr[:resume_opt_iter] = data['cv_err_arr']
             gSRS_pct_arr[:resume_opt_iter] = data['gSRS_pct_arr']
@@ -474,7 +459,6 @@ class Optimizer:
                 print('\nStart optimization iteration = %d/%d' % (k+1,opt_iter))
             
             tt1 = default_timer()
-            tt1_c = clock()
             
             ########### Read activated node #######
                 
@@ -496,7 +480,6 @@ class Optimizer:
                 ########### Fit model ##############
                 
                 t1 = default_timer()
-                t1_c = clock()
     
                 rbf_mod,opt_sm,cv_err,_ = RBF_reg(X_samp,Y_samp,n_core_node,lambda_range,
                                                   normalize_data=normalize_data,gamma=gamma,
@@ -507,9 +490,8 @@ class Optimizer:
                 cv_err_arr[k] = cv_err
                 
                 t2 = default_timer()
-                t2_c = clock()
+
                 t_build_mod[k] = t2-t1
-                t_build_mod_cpu[k] = t2_c-t1_c
                 
                 if verbose:
                     print('time to build model = %.2e sec' % t_build_mod[k])
@@ -517,7 +499,6 @@ class Optimizer:
                 ########### Propose points for next iteration ############## 
                 
                 t1 = default_timer()
-                t1_c = clock()
                 
                 # find gSRS_pct
                 gSRS_pct = np.floor(10*gSRS_pct_full)/10.
@@ -554,10 +535,8 @@ class Optimizer:
                 assert(np.all([bd[0]<=x_star[j]<=bd[1] for j,bd in enumerate(fit_bd)])) # sanity check
                 
                 t2 = default_timer()
-                t2_c = clock()
                 
                 t_prop_pt[k] = t2-t1
-                t_prop_pt_cpu[k] = t2_c-t1_c
                 
                 if verbose:
                     print('time to propose points = %.2e sec' % t_prop_pt[k])
@@ -586,19 +565,18 @@ class Optimizer:
             seed_base += n_proc
             out_list = [os.path.join(outdir, RESULT_SAMP_FILE_TEMP % (prob_name,k+init_iter+1,n+1)) \
                         for n in range(n_proc)]
-            t1, t1_c = default_timer(), clock()
+            t1 = default_timer()
             Y_prop_pt = func_eval(obj_func,prop_pt_arr,seed_arr,out_list,pool_eval,comm)
-            t2, t2_c = default_timer(), clock()
+            t2 = default_timer()
             Y_prop_pt = np.array(Y_prop_pt)
             assert(len(prop_pt_arr) == len(Y_prop_pt) == n_proc)
             
             assert(np.all(seed_flat_arr == np.arange(np.min(seed_flat_arr),np.max(seed_flat_arr)+1)))
             
-            t_eval_prop[k] = t2-t1
-            t_eval_prop_cpu[k] = t2_c-t1_c
+            t_eval_pt[k] = t2-t1
             
             if verbose:
-                print('time to evaluate points = %.2e sec' % t_eval_prop[k])
+                print('time to evaluate points = %.2e sec' % t_eval_pt[k])
             
             # update node
             n_X_all = len(X_all)
@@ -636,7 +614,7 @@ class Optimizer:
                     act_node['state']['w'] = gamma
             
             # save to netcdf file
-            t1, t1_c = default_timer(), clock()
+            t1 = default_timer()
             if save_samp:
                 out_file = os.path.join(outdir, RESULT_GENERAL_SAMP_FILE_TEMP % (prob_name,k+init_iter+1))
                 if os.path.isfile(out_file):
@@ -652,12 +630,10 @@ class Optimizer:
                     nc_seed = f.createVariable('seed','i',('samp',))
                     nc_seed[:] = seed_arr
                     nc_wall_time = f.createVariable('tw_eval','d',())
-                    nc_wall_time.assignValue(t_eval_prop[k])
-                    nc_cpu_time = f.createVariable('tc_eval','d',())
-                    nc_cpu_time.assignValue(t_eval_prop_cpu[k])
+                    nc_wall_time.assignValue(t_eval_pt[k])
             
-            t2, t2_c = default_timer(), clock()
-            t_save, t_save_c = t2-t1, t2_c-t1_c
+            t2 = default_timer()
+            t_save = t2-t1
             
             if verbose:
                 print('time to save samples = %.2e sec' % t_save)
@@ -671,7 +647,7 @@ class Optimizer:
             
             ############# Prepare for next iteration #############
             
-            tp1, tp1_c = default_timer(), clock()
+            tp1 = default_timer()
                
             if not full_restart:
                 
@@ -766,24 +742,21 @@ class Optimizer:
                     n_full_restart = 0
             
             tm2 = default_timer()
-            t_misc = tm2-tm1-t_eval_prop[k]-t_save
+            t_misc = tm2-tm1-t_eval_pt[k]-t_save
             
             if verbose:
                 print('time for miscellaneous tasks (saving variables, etc.) = %.2e sec' % t_misc)
             
             # find time to prepare for next iteration
-            tp2, tp2_c = default_timer(), clock()
-            t_prep[k] = tp2-tp1
-            t_prep_cpu[k] = tp2_c-tp1_c
+            tp2 = default_timer()
+            t_update[k] = tp2-tp1
             
             # find the time to run optimization algortithm (excluding time to evaluate and save samples)
             tt2 = default_timer()
-            tt2_c = clock()
-            t_opt[k] = tt2-tt1-t_eval_prop[k]-t_save
-            t_opt_cpu[k] = tt2_c-tt1_c-t_eval_prop_cpu[k]-t_save_c
+            t_alg = tt2-tt1-t_eval_pt[k]-t_save
             
             if verbose:
-                print('time to run optimization algorithm = %.2e sec' % t_opt[k])
+                print('time to run optimization algorithm = %.2e sec' % t_alg)
                     
             ########### Save results ###############
             
@@ -808,9 +781,8 @@ class Optimizer:
                      n_fold=n_fold,resol=resol,min_beta=min_beta,rbf_kernel=rbf_kernel,
                      func_bd=func_bd,max_C_fail=max_C_fail,resume_iter=resume_iter,n_iter=n_iter,
                      # optimization results
-                     t_build_mod=t_build_mod[:k+1],t_build_mod_cpu=t_build_mod_cpu[:k+1],t_prop_pt=t_prop_pt[:k+1],
-                     t_prop_pt_cpu=t_prop_pt_cpu[:k+1],t_eval_prop=t_eval_prop[:k+1],t_eval_prop_cpu=t_eval_prop_cpu[:k+1],
-                     t_opt=t_opt[:k+1],t_opt_cpu=t_opt_cpu[:k+1],t_prep=t_prep[:k+1],t_prep_cpu=t_prep_cpu[:k+1],
+                     t_build_mod=t_build_mod[:k+1],t_prop_pt=t_prop_pt[:k+1],
+                     t_eval_pt=t_eval_pt[:k+1],t_update=t_update[:k+1],
                      opt_sm_arr=opt_sm_arr[:k+1],cv_err_arr=cv_err_arr[:k+1],
                      gSRS_pct_arr=gSRS_pct_arr[:k+1],n_zoom_arr=n_zoom_arr[:k+1],
                      best_loc_it=best_loc_it[:init_iter+k+1],
@@ -836,12 +808,6 @@ class Optimizer:
             if std_err_file is not None:
                 sys.stderr.terminal.flush()
                 sys.stderr.log.flush()
-              
-        # reset stdout and stderr
-        if std_out_file is not None:
-            sys.stdout = orig_std_out # set back to original stdout (i.e. to console only)
-        if std_err_file is not None:
-            sys.stderr = orig_std_err # set back to original stderr (i.e. to console only)
         
         # find best point and its (noisy) function value
         min_ix = np.argmin(best_val_it)
@@ -871,7 +837,48 @@ class Optimizer:
         unit_X = lhs(self._dim, samples=n_samp, criterion=criterion) # unit_X: 2d array in unit cube
         samp = np.zeros_like(unit_X)
         for i in range(self._dim):
-            samp[:, i] = unit_X[:, i]*(self._domain[i][1]-self._domain[i][0])+self._domain[i][0] # scale and shift
+            samp[:, i] = unit_X[:, i]*(self._prob.domain[i][1]-self._prob.domain[i][0])+self._prob.domain[i][0] # scale and shift
             
         return samp
+    
+    def is_done(self):
+        """
+        Check whether we are done with the optimization.
+        
+        Returns:
+            
+            done (bool): Indicator.
+        """
+        if self._n_iter is None:
+            assert(self.i_restart <= self._n_restart+1)
+            done = self.i_restart > self._n_restart
+        else:
+            assert(self.i_iter <= self._n_iter)
+            done = self.i_iter == self._n_iter
+            
+        return done
+    
+    def save_state(self):
+        """
+        Save the state of the optimizer to files.
+        """
+    
+    def load_state(self):
+        """
+        Load the state of the optimizer from files.
+        """
+        
+    def visualize(self, fig_paths={'optim_curve': None, 'zoom_level': None, 'time': None}):
+        """
+        Visualize optimization progress.
+        
+        Args:
+            
+            fig_paths (dict, optional): Paths where the plots will be saved.
+                The keys of `fig_paths` are the types of plots. The values
+                of the keys are paths to be saved. If the value of a key is None 
+                or the key does not exist, a plot will be shown but no figure 
+                will be saved for the plot. If the value of a key is specified,
+                then a plot will be shown, and will be saved to this key value.
+        """
     

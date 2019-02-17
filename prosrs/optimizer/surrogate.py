@@ -4,7 +4,7 @@ Copyright (C) 2016-2019 Chenchao Shou
 Licensed under Illinois Open Source License (see the file LICENSE). For more information
 about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-source-license.
 
-Contain functions and class that deal with surrogates.
+Contain functions and class that deal with the surrogate.
 """
 import numpy as np
 from scipy.special import xlogy
@@ -13,7 +13,7 @@ import warnings
 from sklearn import preprocessing
 from sklearn.model_selection import KFold
 from functools import partial
-from ..utility.function import unique_row
+from ..utility.functions import unique_row
 
 
 class Rbf(object):

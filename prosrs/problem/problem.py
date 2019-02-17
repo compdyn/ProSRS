@@ -4,13 +4,13 @@ Copyright (C) 2016-2019 Chenchao Shou
 Licensed under Illinois Open Source License (see the file LICENSE). For more information
 about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-source-license.
 
-Define optimization problem class.
+Define an optimization problem.
 """
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import warnings
-from ..utility.function import eval_func
+from ..utility.functions import eval_func
 from mpl_toolkits.mplot3d import Axes3D # needed for ``fig.add_subplot(111, projection='3d')``   
 
 
@@ -66,11 +66,14 @@ class Problem:
         self.F = true_func
         self.min_loc = min_loc
         self.min_true_func = min_true_func
+        self.domain_lb, self.domain_ub = zip(*self.domain) # domain lower bounds and domain upper bounds
+        self.domain_lb, self.domain_ub = np.array(self.domain_lb), np.array(self.domain_ub) # convert to 1d array
         # sanity check
         if self.dim != len(self.x_var):
             raise ValueError('Inconsistent dimension for x_var and domain.')
         if self.min_loc is not None:
             assert(self.min_loc.shape[1] == self.dim), 'Wrong shape for min_loc.'
+        assert(np.all(self.domain_lb < self.domain_ub))
     
     def __str__(self):
         """
