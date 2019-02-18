@@ -12,6 +12,7 @@ from pyDOE import lhs
 from pathos.multiprocessing import ProcessingPool as Pool
 from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP
 from ..utility.classes import std_out_logger, std_err_logger
+from ..utility.functions import eval_func
 #TODO: change 'processes=' to 'nodes=' for pool initialization.
 #TODO: change 'wgt_expon' to 'gamma'. "wgt_expon = - gamma". Change rbf_wgt() and optimizer function accordingly.
 
@@ -20,8 +21,8 @@ class Optimizer:
     """
     A class that handles optimization using ProSRS algorithm.
     """
-    def __init___(self, prob, n_worker, n_proc_master=None, n_iter=None, n_restart=2, resume=False, 
-                  seed=1, seed_func=None, out_dir='out'):
+    def __init___(self, prob, n_worker, n_proc_master=None, n_iter=None, n_iter_doe=None, 
+                  n_restart=2, resume=False, seed=1, seed_func=None, out_dir='out'):
         """
         Constructor.
         
@@ -40,6 +41,9 @@ class Optimizer:
             n_iter (int or None, optional): Total number of iterations for the optimization.
                 If ``int``, the optimization will terminate upon finishing running `n_iter` iterations. 
                 If None, then we use number of restarts `n_restart` as the termination condition.
+            
+            n_iter_doe (int or None, optional): Number of iterations for DOE.
+                If None, then we use default value.
                 
             n_restart (int, optional): Total number of restarts for the optimization.
                 This parameter takes effect only when `n_iter` is None, and 
@@ -91,7 +95,7 @@ class Optimizer:
         self._resol = 0.01 # resolution parameter for restart.
         self._use_eff_n_samp = True # whether to use effective number of samples for the dynamics of p value.
         self._max_C_fail = max(2, int(np.ceil(self._dim/float(self._n_worker)))) # maximum number of consecutive failures before halving self.sigma value.
-        self._n_iter_doe = int(np.ceil(3/float(self._n_worker))) # default number of iterations for DOE.
+        self._n_iter_doe = int(np.ceil(3/float(self._n_worker))) if n_iter_doe is None else n_iter_doe # number of iterations for DOE.
         self._n_iter_doe = min(self._n_iter, self._n_iter_doe) if self._n_iter is not None else self._n_iter_doe # adjusted for the fact that self._n_iter_doe <= self._n_iter.
         self._n_doe_samp = self._n_iter_doe * self._n_worker # number of DOE samples
         self._n_cand = self._n_cand_fact * self._dim # number of candidate points in SRS method
@@ -130,8 +134,8 @@ class Optimizer:
         if not self._resume:
             self.i_iter = 0 # iteration index (how many iterations have been run)
             self.i_restart = 0 # restart index (how many restarts have been initiated)
-            self.remain_doe_samp = np.zeros((0, self._dim)) # remaining DOE samples
-            self.i_iter_doe = 0 # iteration index during DOE phase (how many DOE iterations have been run in current cycle)
+            self.doe_samp = self.doe() # DOE samples
+            self.i_iter_doe = 0 # iteration index during DOE phase (how many DOE iterations have been run in current restart cycle)
             self.t_build_arr = np.zeros(0) # time of building a RBF model for each iteration. If an iteration is DOE, = np.nan.  
             self.t_prop_arr = np.zeros(0) # time of proposing new points for each iteration.
             self.t_eval_arr = np.zeros(0) # time of evaluating proposed points for each iteration.
@@ -144,7 +148,7 @@ class Optimizer:
             self.best_x = np.ones(self._dim)*np.nan # best point so far.
             self.best_y = np.nan # (noisy) y value of the best point `self.best_x`.
             np.random.seed(self._seed) # set random seed.
-            self.random_state = np.random.get_state() # numpy random state.
+            self.random_state = np.random.get_state() # FIXME: check necessity of passing random state within the class.
             self.zoom_lv = 0 # zoom level (zero-based).
             self.act_node_ix = 0 # index of the activate node for the zoom level `self.zoom_lv` (zero-based).
             self.srs_wgt_pat = np.linspace(self._wgt_pat_bd[0], self._wgt_pat_bd[1], self._n_proc_master) # weight pattern in the SRS method.
@@ -193,109 +197,37 @@ class Optimizer:
                 If ``str``, then standard errors will be directed to the file `std_err_file`.
                 If None, then standard errors will not be saved to a file.
             
-        """
-        self._verbose = verbose
-        self._std_out_file = std_out_file
-        self._std_err_file = std_err_file
-            
-        # Log standard outputs and standard errors to files
+        """            
+        # log standard outputs and standard errors to files
         # Here we write to a new file if we do not resume. Otherwise, we append to the old file.
-        if self._std_out_file is not None:
+        if std_out_file is not None:
             if not self._resume:
-                if os.path.isfile(self._std_out_file):
-                    os.remove(self._std_out_file)
-            sys.stdout = std_out_logger(self._std_out_file)    
-        if self._std_err_file is not None:
+                if os.path.isfile(std_out_file):
+                    os.remove(std_out_file)
+            sys.stdout = std_out_logger(std_out_file)    
+        if std_err_file is not None:
             if not self._resume:
-                if os.path.isfile(self._std_err_file):
-                    os.remove(self._std_err_file)
-            sys.stderr = std_err_logger(self._std_err_file)
+                if os.path.isfile(std_err_file):
+                    os.remove(std_err_file)
+            sys.stderr = std_err_logger(std_err_file)
         
         # main loop
         while not self.is_done():
-            
-            # TODO: to be continued
-            
             # propose new points
-            
-            if verbose:
-                pass 
+            new_pt = self.propose(verbose=verbose)
             
             # evaluate proposed points
+            new_val = self.eval_pt(new_pt, verbose=verbose)
+            
+            # update optimizer state with the new evaluations
+            self.update(new_pt, new_val, verbose=verbose)
             
             if verbose:
+                # TODO: display some summary of results
                 pass
             
-            # update optimizer state (also save the state)
             
-            if verbose:
-                pass
             
-        
-        
-        ########################### Functions ###############################
-        
-        def propose(gSRS_pct,x_star,rbf_mod,n_reduce_step_size,wgt_pat_arr,fit_bd,X_samp):
-            '''
-            Propose points using SRS method.
-            Input:
-                gSRS_pct: float
-                x_star: 1d array
-                rbf_mod: function
-                n_reduce_step_size: int
-                wgt_pat_arr: weight pattern array, 1d array
-                fit_bd: list of tuples
-                X_samp: 2d array
-            Output:
-                prop_pt_arr: 2d array
-            '''
-            assert(wgt_pat_arr.ndim == 1 and np.min(wgt_pat_arr) >= 0 and np.max(wgt_pat_arr) <= 1)
-            n_prop = len(wgt_pat_arr) # number of proposed points
-            
-            if gSRS_pct == 1:
-                
-                #### pure global SRS ####
-                
-                # generate candidate points uniformly (global SRS)
-                cand_pt = np.zeros((n_cand,dim))
-                for d,bd in enumerate(fit_bd):
-                    cand_pt[:,d] = np.random.uniform(low=bd[0],high=bd[1],size=n_cand)
-                prop_pt_arr = SRS(rbf_mod,cand_pt,X_samp,wgt_pat_arr)
-                        
-            else:
-                #### global-local SRS (possibly pure local SRS) ####
-                
-                # get number of candidate points for both global and local SRS
-                n_cand_gSRS = int(np.round(n_cand*gSRS_pct))
-                n_cand_lSRS = n_cand-n_cand_gSRS # total number of candidate points for local SRS
-                assert (n_cand_lSRS>0) # sanity check
-                
-                # generate candidate points uniformly (global SRS)           
-                cand_pt = np.zeros((n_cand_gSRS,dim))
-                if n_cand_gSRS>0:
-                    for d,bd in enumerate(fit_bd):
-                        cand_pt[:,d] = np.random.uniform(low=bd[0],high=bd[1],size=n_cand_gSRS)
-                
-                # find step size (i.e. std) for each coordinate of x_star
-                sigma = init_sigma*0.5**n_reduce_step_size
-                step_size_arr = np.array([sigma*(x[1]-x[0]) for x in fit_bd])
-                assert(np.min(step_size_arr)>0) # sanity check
-                
-                # generate candidate points (gaussian about x_star, local SRS)
-                cand_pt_lSRS = np.random.multivariate_normal(x_star,\
-                                                             np.diag(step_size_arr**2),n_cand_lSRS)
-                # add to candidate points
-                cand_pt = np.vstack((cand_pt,cand_pt_lSRS))
-                
-                # put candidate points back to the domain, if there's any outside
-                cand_pt, cand_pt_raw = put_back_box(cand_pt,fit_bd)
-                if len(cand_pt) >= n_prop:
-                    prop_pt_arr = SRS(rbf_mod,cand_pt,X_samp,wgt_pat_arr)
-                else:
-                    # this rarely happens, then we use raw candidate point (possibly with duplicate points)
-                    prop_pt_arr = SRS(rbf_mod,cand_pt_raw,X_samp,wgt_pat_arr)
-                
-            return prop_pt_arr
         
         ########################### Main program ############################
         
@@ -776,14 +708,11 @@ class Optimizer:
         # find best point and its (noisy) function value
         
         
-    def doe(self, n_samp=None, criterion='maximin'):
+    def doe(self, criterion='maximin'):
         """
         Design of experiments using Latin Hypercube Sampling (LHS).
         
         Args:
-            
-            n_samp (int or None, optional): Number of samples in LHS. 
-                If None, we use the default value.
             
             criterion (str, optional): Sampling criterion for LHS.
                 For details, see `pyDOE documentation <https://pythonhosted.org/pyDOE/randomized.html>`.
@@ -792,8 +721,7 @@ class Optimizer:
             
             samp (2d array): LHS samples. Each row is one sample.
         """
-        n_samp = self._n_doe_samp if n_samp is None else n_samp
-        unit_X = lhs(self._dim, samples=n_samp, criterion=criterion) # unit_X: 2d array in unit cube
+        unit_X = lhs(self._dim, samples=self._n_doe_samp, criterion=criterion) # unit_X: 2d array in unit cube
         samp = np.zeros_like(unit_X)
         for i in range(self._dim):
             samp[:, i] = unit_X[:, i]*(self._prob.domain[i][1]-self._prob.domain[i][0])+self._prob.domain[i][0] # scale and shift
@@ -807,7 +735,7 @@ class Optimizer:
         
         Returns:
             
-            state (dict): values of state variables.
+            state (dict): Values of state variables.
         """
         
         state = {'p': self._init_p, # p value in the SRS method (controls proportion of Type I candidate points).
@@ -817,7 +745,152 @@ class Optimizer:
                  }
         
         return state
+    
+    
+    def propose(self, verbose=True):
+        """
+        Propose new points for the next iteration.
         
+        Args:
+            
+            verbose (bool, optional): Whether to verbose about proposing new points.
+        
+        Returns:
+            
+            new_pt (2d array): Proposed new points. Each row is one point.
+        """
+        # FIXME: add verbose
+        np.random.set_state(self.random_state)
+        
+        if self.i_iter_doe < self._n_iter_doe:
+            # i.e., current iteration is in DOE phase
+            new_pt = self.doe_samp[self.i_iter_doe*self._n_worker:(self.i_iter_doe+1)*self._n_worker]
+        else:
+            # i.e., current iteration is in true optimization phase
+            
+            # TODO: to be continued
+            
+            
+        
+        self.random_state = np.random.get_state()
+        
+        return new_pt
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        if gSRS_pct == 1:
+            
+            #### pure global SRS ####
+            
+            # generate candidate points uniformly (global SRS)
+            cand_pt = np.zeros((n_cand,dim))
+            for d,bd in enumerate(fit_bd):
+                cand_pt[:,d] = np.random.uniform(low=bd[0],high=bd[1],size=n_cand)
+            prop_pt_arr = SRS(rbf_mod,cand_pt,X_samp,wgt_pat_arr)
+                    
+        else:
+            #### global-local SRS (possibly pure local SRS) ####
+            
+            # get number of candidate points for both global and local SRS
+            n_cand_gSRS = int(np.round(n_cand*gSRS_pct))
+            n_cand_lSRS = n_cand-n_cand_gSRS # total number of candidate points for local SRS
+            assert (n_cand_lSRS>0) # sanity check
+            
+            # generate candidate points uniformly (global SRS)           
+            cand_pt = np.zeros((n_cand_gSRS,dim))
+            if n_cand_gSRS>0:
+                for d,bd in enumerate(fit_bd):
+                    cand_pt[:,d] = np.random.uniform(low=bd[0],high=bd[1],size=n_cand_gSRS)
+            
+            # find step size (i.e. std) for each coordinate of x_star
+            sigma = init_sigma*0.5**n_reduce_step_size
+            step_size_arr = np.array([sigma*(x[1]-x[0]) for x in fit_bd])
+            assert(np.min(step_size_arr)>0) # sanity check
+            
+            # generate candidate points (gaussian about x_star, local SRS)
+            cand_pt_lSRS = np.random.multivariate_normal(x_star,\
+                                                         np.diag(step_size_arr**2),n_cand_lSRS)
+            # add to candidate points
+            cand_pt = np.vstack((cand_pt,cand_pt_lSRS))
+            
+            # put candidate points back to the domain, if there's any outside
+            cand_pt, cand_pt_raw = put_back_box(cand_pt,fit_bd)
+            if len(cand_pt) >= n_prop:
+                prop_pt_arr = SRS(rbf_mod,cand_pt,X_samp,wgt_pat_arr)
+            else:
+                # this rarely happens, then we use raw candidate point (possibly with duplicate points)
+                prop_pt_arr = SRS(rbf_mod,cand_pt_raw,X_samp,wgt_pat_arr)
+            
+        return prop_pt_arr
+        
+    
+    def update(self, new_x, new_y, verbose=True):
+        """
+        Update the state of the optimizer.
+        
+        Args:
+            
+            new_x (2d array): Proposed new points. Each row is one point.
+            
+            new_y (1d array): (Noisy) values of the points in `new_x`.
+            
+            verbose (bool, optional): Whether to verbose about updating the state of the optimizer.
+        """
+        # FIXME: add verbose
+        np.random.set_state(self.random_state)
+        
+        if self.i_iter_doe < self._n_iter_doe: # i.e., current iteration is in DOE phase
+            self.i_iter_doe += 1    
+        self.i_iter += 1
+        
+        # TODO: to be continued
+        
+        if restart: # FIXME: fix `restart` variable: we need to do at least the following:
+            self.i_iter_doe = 0
+            self.doe_samp = self.doe()
+            self.i_restart += 1
+            
+            # TODO: to be continued
+        
+        self.random_state = np.random.get_state()
+        
+    
+    def eval_pt(self, x, verbose=True):
+        """
+        Evaluate proposed points.
+        
+        Args:
+            
+            x (2d array): Points to be evaluated. Each row is one point.
+            
+            verbose (bool, optional): Whether to verbose about the evaluation.
+        
+        Returns:
+            
+            y (1d array): Evaluations of points in `x`.
+        """
+        # FIXME: add verbose
+        np.random.set_state(self.random_state)
+        
+        self.eval_seeds = self._seed+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
+        y = eval_func(self._prob.f, x, n_proc=self._n_worker, seeds=self.eval_seeds.tolist(),
+                      seed_func=self._seed_func)
+        
+        self.random_state = np.random.get_state()
+        
+        return y
+   
+     
     def is_done(self):
         """
         Check whether we are done with the optimization.
@@ -834,6 +907,7 @@ class Optimizer:
             done = self.i_iter == self._n_iter
             
         return done
+    
     
     def save_state(self):
         """
