@@ -11,7 +11,7 @@ from pathos.multiprocessing import ProcessingPool as Pool
 from timeit import default_timer
 
 
-def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
+def eval_func(func, pts, n_proc=1, seeds=None, seed_func=None, save_files=None):
     """
     Evaluate a function in serial/parallel.
     
@@ -31,6 +31,12 @@ def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
             
         seeds (list or None, optional): Random seed for each point in `pts`.
             If None, then no random seed will be set for any evaluation.
+        
+        seed_func (callable or None, optional): User-specified function for setting the random seed.
+            If None, then we use ``numpy.random.seed`` method to set random seed.
+            If callable, it is a function taking ``seed`` as an argument.
+            Note: using ``numpy.random.seed`` may not always gaurantee
+            the reproducibility. Here we provide an option for users to specify their own routines.
         
         save_files (list or None): Specify ``.npz`` file where each evaluation will be saved.
             If None, then no evaluation will be saved. It may be helpful to save evaluations
@@ -68,7 +74,12 @@ def eval_func(func, pts, n_proc=1, seeds=None, save_files=None):
         pt, seed, save_file = arg
         
         if seed is not None:
-            np.random.seed(seed) # set random seed
+            # set random seed
+            if seed_func is None:
+                np.random.seed(seed)
+            else:
+                assert(callable(seed_func)), 'seed_func is not callable.'
+                seed_func(seed)
         
         t1 = default_timer()
         val = func(pt)

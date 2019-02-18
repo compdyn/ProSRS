@@ -21,7 +21,7 @@ class Optimizer:
     A class that handles optimization using ProSRS algorithm.
     """
     def __init___(self, prob, n_worker, n_proc_master=None, n_iter=None, n_restart=2, resume=False, 
-                  seed=1, out_dir='out'):
+                  seed=1, seed_func=None, out_dir='out'):
         """
         Constructor.
         
@@ -34,7 +34,7 @@ class Optimizer:
                 points per iteration.
             
             n_proc_master (int or None, optional): Number of parallel processes (cores)
-                that will be used in the master node. If None, then all the available
+                that will be used in the master. If None, then all the available
                 processes (cores) of the master will be used.
                 
             n_iter (int or None, optional): Total number of iterations for the optimization.
@@ -51,6 +51,12 @@ class Optimizer:
             seed (int or None, optional): Random seed for the optimizer.
                 If None, then we do not set random seed for the optimization.
             
+            seed_func (callable or None, optional): User-specified function for setting the random seed for evaluations.
+                If None, then we use ``numpy.random.seed(seed)`` method to set random seed.
+                If callable, it is a function taking ``seed`` as an argument.
+                Note: using ``numpy.random.seed`` may not always gaurantee
+                the reproducibility. Here we provide an option for users to specify their own routines.
+            
             out_dir (str, optional): Output directory.
                 All the output files (e.g., optimization status file) will be saved to
                 `out_dir` directory.
@@ -59,11 +65,12 @@ class Optimizer:
         self._prob = prob # optimization problem
         self._dim = prob.dim # dimention of optimization problem.
         self._n_worker = n_worker # number of workers.
-        self._n_proc_master = n_proc_master # number of parallel processes in the master node.
+        self._n_proc_master = n_proc_master # number of parallel processes in the master.
         self._n_iter = n_iter # total number of iterations.
         self._n_restart = n_restart # total number of restarts.
         self._resume = resume # whether to resume from the last run.
         self._seed = seed # random seed for the optimizer.
+        self._seed_func = seed_func # function for setting random seed for evaluations.
         self._out_dir = out_dir # output directory.
         self._n_cand_fact = 1000 # number of candidate = self._n_cand_fact * self._dim.
         self._wgt_pat_bd = [0.3, 1.] # the bound of the weight pattern in the SRS method.
@@ -73,7 +80,7 @@ class Optimizer:
         self._init_sigma = 0.1 # initial sigma value in the SRS method (controls initial spread of Type II candidate points).
         self._max_n_reduce_sigma = 2 # max number of times of halving self.sigma before zooming in/restart. Critical sigma value = self._init_sigma * 0.5**self._max_n_reduce_sigma.
         self._rho = 0.4 # zoom-in factor. Must be in (0, 1).
-        self._init_p = 1. # initial p value in the SRS method (roughly = initial proportion of Type I candidate points).
+        self._init_p = 1. # initial p value in the SRS method (controls initial proportion of Type I candidate points).
         self._init_beta = 0.02 # initial beta value (= initial probability of zooming out).
         self._min_beta = 0.01 # minimum beta value (= minimum probability of zooming out).
         self._alpha = 1. # parameter controlling decreasing rate of p value: p = p*n_{eff}**(-self._alpha/self.dim).
@@ -84,7 +91,9 @@ class Optimizer:
         self._resol = 0.01 # resolution parameter for restart.
         self._use_eff_n_samp = True # whether to use effective number of samples for the dynamics of p value.
         self._max_C_fail = max(2, int(np.ceil(self._dim/float(self._n_worker)))) # maximum number of consecutive failures before halving self.sigma value.
-        self._n_iter_doe = min(self._n_iter, int(np.ceil(3/float(self._n_worker)))) # default number of iterations for DOE.
+        self._n_iter_doe = int(np.ceil(3/float(self._n_worker))) # default number of iterations for DOE.
+        self._n_iter_doe = min(self._n_iter, self._n_iter_doe) if self._n_iter is not None else self._n_iter_doe # adjusted for the fact that self._n_iter_doe <= self._n_iter.
+        self._n_doe_samp = self._n_iter_doe * self._n_worker # number of DOE samples
         self._n_cand = self._n_cand_fact * self._dim # number of candidate points in SRS method
         self._state_npz_file = os.path.join(self._out_dir, STATE_NPZ_FILE_TEMP % self._prob.name) # file that saves optimizer state (useful for resume)
         self._state_pkl_file = os.path.join(self._out_dir, STATE_PKL_FILE_TEMP % self._prob.name) # file that saves optimizer state (useful for resume)
@@ -123,12 +132,32 @@ class Optimizer:
             self.i_restart = 0 # restart index (how many restarts have been initiated)
             self.remain_doe_samp = np.zeros((0, self._dim)) # remaining DOE samples
             self.i_iter_doe = 0 # iteration index during DOE phase (how many DOE iterations have been run in current cycle)
-            self.t_build_mod = np.zeros(0) # time of building a RBF model for each iteration. If an iteration is DOE, = np.nan.  
-            self.t_prop_pt = np.zeros(0) # time of proposing new points for each iteration.
-            self.t_eval_pt = np.zeros(0) # time of evaluating proposed points for each iteration.
-            self.t_update = np.zeros(0) # time of updating the optimizer state for each iteration.
-            # TODO: to be continued
-        
+            self.t_build_arr = np.zeros(0) # time of building a RBF model for each iteration. If an iteration is DOE, = np.nan.  
+            self.t_prop_arr = np.zeros(0) # time of proposing new points for each iteration.
+            self.t_eval_arr = np.zeros(0) # time of evaluating proposed points for each iteration.
+            self.t_update_arr = np.zeros(0) # time of updating the optimizer state for each iteration.
+            self.gSRS_pct_arr = np.zeros(0) # pertentage of global SRS (= percentage of Type I candidates = floor(10*p_val)/10.) for each iteration.
+            self.zoom_lv_arr = np.zeros(0) # zoom level at the time of proposing new points for each iteration.
+            self.x_all = np.zeros((0, self._dim)) # all the evaluated (proposed) points so far.
+            self.y_all = np.zeros(0) # (noisy) y values of `self.x_all`.
+            self.seed_all = np.zeros(0) # random seeds for points in `self.x_all`.
+            self.best_x = np.ones(self._dim)*np.nan # best point so far.
+            self.best_y = np.nan # (noisy) y value of the best point `self.best_x`.
+            np.random.seed(self._seed) # set random seed.
+            self.random_state = np.random.get_state() # numpy random state.
+            self.zoom_lv = 0 # zoom level (zero-based).
+            self.act_node_ix = 0 # index of the activate node for the zoom level `self.zoom_lv` (zero-based).
+            self.srs_wgt_pat = np.linspace(self._wgt_pat_bd[0], self._wgt_pat_bd[1], self._n_proc_master) # weight pattern in the SRS method.
+            # initialize optimization tree
+            self.tree = {self.zoom_lv: [{'ix': np.arange(self._n_doe_samp, dtype=int), # indice of samples for the tree node (w.r.t. `self.x_all` or `self.y_all`).
+                                         'bd': self._prob.domain, # domain of the tree node.
+                                         'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent.
+                                         'zp': self._init_beta, # zoom-out probability.
+                                         'state': self.init_node_state() # state of the tree node.
+                                         }]}
+            
+            # TODO: possibly initialize more variables hereafter
+            
         else:
             # load optimizer state from the last run
             self.load_state()
@@ -206,20 +235,6 @@ class Optimizer:
         
         ########################### Functions ###############################
         
-        def init_state():
-            '''
-            Initialize the state of a node
-            Output:
-                state: dictionary of state variables
-            '''
-            
-            state = {'p': init_p, # global SRS percentage (full, without rounding to 0.1 resolution)
-                     'Cr': 0, # counter that counts number of times of reducing step size of local SRS
-                     'Cf': 0, # counter that counts number of consecutive failures
-                     'w': init_gamma # weight exponent parameter of weighted RBF
-                     }
-            return state
-        
         def propose(gSRS_pct,x_star,rbf_mod,n_reduce_step_size,wgt_pat_arr,fit_bd,X_samp):
             '''
             Propose points using SRS method.
@@ -284,15 +299,6 @@ class Optimizer:
         
         ########################### Main program ############################
         
-        
-        opt_sm_arr = np.nan*np.ones(opt_iter) # save optimal smooth parameter
-        cv_err_arr = [None]*opt_iter # save cv error for each iteration
-        gSRS_pct_arr = np.zeros(opt_iter) # save gSRS_pct in each iteration
-        n_zoom_arr = np.zeros(opt_iter) # save n_zoom in each iteration
-        best_loc_it = np.zeros((init_iter+opt_iter,dim)) # save best points for each iteration
-        best_val_it = np.zeros(init_iter+opt_iter) # save Y value for the best point for each iteration
-        best_seed_it = np.zeros(init_iter+opt_iter,dtype=int) # save random seed corresponding to the best point for each iteration
-        
         if resume_iter is None:
             
             ########### Initial sampling (DOE) ################ 
@@ -330,10 +336,6 @@ class Optimizer:
                 Y = func_eval(obj_func,X,seed_arr,out_list,pool_eval,comm)
                 t2 = default_timer()
                 t_eval[k] = t2-t1
-                # get best value and best location for each iteration
-                min_ix = np.argmin(Y)
-                best_loc_it[k],best_val_it[k] = X[min_ix],Y[min_ix]
-                best_seed_it[k] = seed_arr[min_ix]
                 # save Y
                 Y_all[ix1:ix2] = Y
                 
@@ -362,26 +364,12 @@ class Optimizer:
         
             ######### Initializations for optimization ########
                 
-            # zoom level indicator (zero-based)
-            n_zoom = 0
-            # activate node index (for zoom level = n_zoom, zero-based)
-            act_node_ix = 0
             # count number of full restart
             n_full_restart = 0
             # full restart flag
             full_restart = False
-            # running weight for SRS (useful only when n_proc = 1)
-            run_wgt_SRS = wgt_pat_bd[0]
             # doe samples for restart (useful for resume)
             X_samp_restart = np.zeros((0,dim))
-            
-            # optimization tree
-            tree = {n_zoom: [{'ix': np.arange(n_init_samp,dtype=int), # indice of samples of the node (with respect to X_all and Y_all)
-                              'bd': func_bd, # domain of the node
-                              'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent
-                              'zp': init_beta, # zoom-out probability
-                              'state': init_state() # state of the node
-                              }]}
         
         else:
             
@@ -413,9 +401,8 @@ class Optimizer:
             
             # read status variables from previous experiment
             full_restart = data['full_restart'].item(0)
-            run_wgt_SRS = data['run_wgt_SRS'].item(0)
             X_samp_restart = data['X_samp_restart']
-            n_zoom = data['n_zoom'].item(0)
+            zoom_lv = data['zoom_lv'].item(0)
             act_node_ix = data['act_node_ix'].item(0)
             X_all = data['X_all']
             Y_all = data['Y_all']
@@ -425,17 +412,12 @@ class Optimizer:
             seed_flat_arr = data['seed_flat_arr']
             
             # read optimization results from previous experiment
-            t_build_mod[:resume_opt_iter] = data['t_build_mod']
-            t_prop_pt[:resume_opt_iter] = data['t_prop_pt']
-            t_eval_pt[:resume_opt_iter] = data['t_eval_pt']
-            t_update[:resume_opt_iter] = data['t_update']
-            opt_sm_arr[:resume_opt_iter] = data['opt_sm_arr']
-            cv_err_arr[:resume_opt_iter] = data['cv_err_arr']
+            t_build_arr[:resume_opt_iter] = data['t_build_arr']
+            t_prop_arr[:resume_opt_iter] = data['t_prop_arr']
+            t_eval_arr[:resume_opt_iter] = data['t_eval_arr']
+            t_update_arr[:resume_opt_iter] = data['t_update_arr']
             gSRS_pct_arr[:resume_opt_iter] = data['gSRS_pct_arr']
-            n_zoom_arr[:resume_opt_iter] = data['n_zoom_arr']
-            best_loc_it[:init_iter+resume_opt_iter] = data['best_loc_it']
-            best_val_it[:init_iter+resume_opt_iter] = data['best_val_it']
-            best_seed_it[:init_iter+resume_opt_iter] = data['best_seed_it']
+            zoom_lv_arr[:resume_opt_iter] = data['zoom_lv_arr']
             
             # load random state
             result_pkl_lock_file = result_pkl_file+'.lock'
@@ -463,7 +445,7 @@ class Optimizer:
             ########### Read activated node #######
                 
             # get activated node
-            act_node = tree[n_zoom][act_node_ix]
+            act_node = tree[zoom_lv][act_node_ix]
             # get samples of the node
             X_samp = X_all[act_node['ix']]
             Y_samp = Y_all[act_node['ix']]
@@ -471,7 +453,7 @@ class Optimizer:
             gSRS_pct_full = act_node['state']['p']
             n_reduce_step_size = act_node['state']['Cr']
             n_fail = act_node['state']['Cf']
-            gamma = act_node['state']['w']
+            gamma = act_node['state']['gamma']
             zoom_out_prob = act_node['zp']
             fit_bd = act_node['bd']
                     
@@ -484,17 +466,13 @@ class Optimizer:
                 rbf_mod,opt_sm,cv_err,_ = RBF_reg(X_samp,Y_samp,n_core_node,lambda_range,
                                                   normalize_data=normalize_data,gamma=gamma,
                                                   n_fold=n_fold,kernel=rbf_kernel,pool=pool_rbf,
-                                                  poly_deg=rbf_poly_deg)
-                # save parameters
-                opt_sm_arr[k] = opt_sm
-                cv_err_arr[k] = cv_err
-                
+                                                  poly_deg=rbf_poly_deg)                
                 t2 = default_timer()
 
-                t_build_mod[k] = t2-t1
+                t_build_arr[k] = t2-t1
                 
                 if verbose:
-                    print('time to build model = %.2e sec' % t_build_mod[k])
+                    print('time to build model = %.2e sec' % t_build_arr[k])
                     
                 ########### Propose points for next iteration ############## 
                 
@@ -513,7 +491,7 @@ class Optimizer:
                     print('n_reduce_step_size = %d' % n_reduce_step_size)
                     print('sigma = %g' % (init_sigma*0.5**n_reduce_step_size))
                     print('zoom_out_prob = %g' % zoom_out_prob)
-                    print('n_zoom = %d' % n_zoom)
+                    print('zoom_lv = %d' % zoom_lv)
                     print('fit_bd =')
                     print(fit_bd)
                     
@@ -522,24 +500,20 @@ class Optimizer:
                 min_ix = np.argmin(Y_fit)
                 x_star = X_samp[min_ix]
                 
-                if n_proc > 1:
-                    wgt_pat_arr = np.linspace(wgt_pat_bd[0],wgt_pat_bd[1],n_proc)
-                else:
-                    assert(run_wgt_SRS in wgt_pat_bd)
-                    wgt_pat_arr = np.array([run_wgt_SRS])
+                if n_proc == 1:
                     # prepare for next iteration
-                    run_wgt_SRS = wgt_pat_bd[0] if run_wgt_SRS == wgt_pat_bd[1] else wgt_pat_bd[1]
+                    srs_wgt_pat = np.array([wgt_pat_bd[0]]) if srs_wgt_pat[0] == wgt_pat_bd[1] else np.array([wgt_pat_bd[1]])
                 
-                prop_pt_arr = propose(gSRS_pct,x_star,rbf_mod,n_reduce_step_size,wgt_pat_arr,fit_bd,X_samp)
+                prop_pt_arr = propose(gSRS_pct,x_star,rbf_mod,n_reduce_step_size,srs_wgt_pat,fit_bd,X_samp)
                 
                 assert(np.all([bd[0]<=x_star[j]<=bd[1] for j,bd in enumerate(fit_bd)])) # sanity check
                 
                 t2 = default_timer()
                 
-                t_prop_pt[k] = t2-t1
+                t_prop_arr[k] = t2-t1
                 
                 if verbose:
-                    print('time to propose points = %.2e sec' % t_prop_pt[k])
+                    print('time to propose points = %.2e sec' % t_prop_arr[k])
         
             else:
                 
@@ -556,7 +530,7 @@ class Optimizer:
             tm1 = default_timer()        
             # save variables
             gSRS_pct_arr[k] = gSRS_pct # save gSRS_pct
-            n_zoom_arr[k] = n_zoom # save n_zoom
+            zoom_lv_arr[k] = zoom_lv # save zoom_lv
             
             ############ Evaluate proposed points #############
             
@@ -573,10 +547,10 @@ class Optimizer:
             
             assert(np.all(seed_flat_arr == np.arange(np.min(seed_flat_arr),np.max(seed_flat_arr)+1)))
             
-            t_eval_pt[k] = t2-t1
+            t_eval_arr[k] = t2-t1
             
             if verbose:
-                print('time to evaluate points = %.2e sec' % t_eval_pt[k])
+                print('time to evaluate points = %.2e sec' % t_eval_arr[k])
             
             # update node
             n_X_all = len(X_all)
@@ -588,7 +562,7 @@ class Optimizer:
             # update state of the current node
             if not full_restart:
                     
-                if n_proc > 1 or (n_proc == 1 and run_wgt_SRS == wgt_pat_bd[0]):
+                if n_proc > 1 or (n_proc == 1 and srs_wgt_pat[0] == wgt_pat_bd[0]):
                     if gSRS_pct_full >= 0.1:
                         # compute gSRS_pct_full
                         if use_eff_n_samp:
@@ -611,7 +585,7 @@ class Optimizer:
                     act_node['state']['p'] = gSRS_pct_full
                     act_node['state']['Cr'] = n_reduce_step_size
                     act_node['state']['Cf'] = n_fail
-                    act_node['state']['w'] = gamma
+                    act_node['state']['gamma'] = gamma
             
             # save to netcdf file
             t1 = default_timer()
@@ -630,20 +604,13 @@ class Optimizer:
                     nc_seed = f.createVariable('seed','i',('samp',))
                     nc_seed[:] = seed_arr
                     nc_wall_time = f.createVariable('tw_eval','d',())
-                    nc_wall_time.assignValue(t_eval_pt[k])
+                    nc_wall_time.assignValue(t_eval_arr[k])
             
             t2 = default_timer()
             t_save = t2-t1
             
             if verbose:
                 print('time to save samples = %.2e sec' % t_save)
-            
-            ############### Output results #################
-            
-            # get the best point for current iteration
-            min_ix = np.argmin(Y_prop_pt)
-            best_loc_it[k+init_iter],best_val_it[k+init_iter] = prop_pt_arr[min_ix],Y_prop_pt[min_ix]
-            best_seed_it[k+init_iter] = seed_arr[min_ix]
             
             ############# Prepare for next iteration #############
             
@@ -657,7 +624,7 @@ class Optimizer:
                     min_ix = np.argmin(Y_fit)
                     x_star = X_all[act_node['ix']][min_ix]
                     # suppose we're going to zoom in
-                    child_node_ix = get_child_node(x_star,n_zoom,tree)
+                    child_node_ix = get_child_node(x_star,zoom_lv,tree)
                     if child_node_ix is None:
                         # then we create a new child (if zoom in)
                         fit_lb, fit_ub = zip(*fit_bd)
@@ -670,10 +637,10 @@ class Optimizer:
                                       'bd': fit_bd,
                                       'parent_ix': act_node_ix,
                                       'zp': init_beta,
-                                      'state': init_state()}
+                                      'state': init_node_state()}
                     else:
                         # then we activate an existing child node (if zoom in)
-                        child_node = tree[n_zoom+1][child_node_ix]
+                        child_node = tree[zoom_lv+1][child_node_ix]
                         child_node['ix'] = np.nonzero(get_box_samp(X_all,child_node['bd'])[0])[0]
                     n_samp = len(child_node['ix'])
                     fit_lb, fit_ub = zip(*child_node['bd'])
@@ -685,29 +652,29 @@ class Optimizer:
                         if verbose:
                             print('Restart for the next iteration!')                        
                         full_restart = True
-                        n_zoom = 0
+                        zoom_lv = 0
                         act_node_ix = 0
                         X_all = np.zeros((0,dim))
                         Y_all = np.zeros(0)
-                        tree = {n_zoom: [{'ix': np.arange(0,dtype=int), # indice of samples for the node (with respect to X_all and Y_all)
+                        tree = {zoom_lv: [{'ix': np.arange(0,dtype=int), # indice of samples for the node (with respect to X_all and Y_all)
                                           'bd': func_bd, # domain of the node
                                           'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent
                                           'zp': init_beta, # zoom-out probability
-                                          'state': init_state() # state of the node
+                                          'state': init_node_state() # state of the node
                                           }]}
                     else:
                         # then we zoom in
-                        act_node['state'] = init_state() # reset the state of the current node
-                        n_zoom += 1
+                        act_node['state'] = init_node_state() # reset the state of the current node
+                        zoom_lv += 1
                         
                         if child_node_ix is None:
                             # then we create a new child
-                            if n_zoom not in tree.keys():
+                            if zoom_lv not in tree.keys():
                                 act_node_ix = 0
-                                tree[n_zoom] = [child_node]    
+                                tree[zoom_lv] = [child_node]    
                             else:
-                                act_node_ix = len(tree[n_zoom])
-                                tree[n_zoom].append(child_node)
+                                act_node_ix = len(tree[zoom_lv])
+                                tree[zoom_lv].append(child_node)
                                 
                             if verbose:
                                 print('Zoom in (create a new child node)!')
@@ -721,15 +688,15 @@ class Optimizer:
                             if verbose:
                                 print('Zoom in (activate an existing child node)!')
                                 
-                if n_proc > 1 or (n_proc == 1 and run_wgt_SRS == wgt_pat_bd[0]):            
-                    if np.random.uniform() < tree[n_zoom][act_node_ix]['zp'] and n_zoom > 0 and not full_restart:
+                if n_proc > 1 or (n_proc == 1 and srs_wgt_pat[0] == wgt_pat_bd[0]):            
+                    if np.random.uniform() < tree[zoom_lv][act_node_ix]['zp'] and zoom_lv > 0 and not full_restart:
                         # then we zoom out
-                        child_node = tree[n_zoom][act_node_ix]
+                        child_node = tree[zoom_lv][act_node_ix]
                         act_node_ix = child_node['parent_ix']
-                        n_zoom -= 1
+                        zoom_lv -= 1
                         assert(act_node_ix is not None)
                         # check that the node after zooming out will contain the current node
-                        assert(intsect_bd(tree[n_zoom][act_node_ix]['bd'],child_node['bd']) == child_node['bd']) 
+                        assert(intsect_bd(tree[zoom_lv][act_node_ix]['bd'],child_node['bd']) == child_node['bd']) 
                         
                         if verbose:
                             print('Zoom out!')
@@ -742,18 +709,18 @@ class Optimizer:
                     n_full_restart = 0
             
             tm2 = default_timer()
-            t_misc = tm2-tm1-t_eval_pt[k]-t_save
+            t_misc = tm2-tm1-t_eval_arr[k]-t_save
             
             if verbose:
                 print('time for miscellaneous tasks (saving variables, etc.) = %.2e sec' % t_misc)
             
             # find time to prepare for next iteration
             tp2 = default_timer()
-            t_update[k] = tp2-tp1
+            t_update_arr[k] = tp2-tp1
             
             # find the time to run optimization algortithm (excluding time to evaluate and save samples)
             tt2 = default_timer()
-            t_alg = tt2-tt1-t_eval_pt[k]-t_save
+            t_alg = tt2-tt1-t_eval_arr[k]-t_save
             
             if verbose:
                 print('time to run optimization algorithm = %.2e sec' % t_alg)
@@ -781,16 +748,13 @@ class Optimizer:
                      n_fold=n_fold,resol=resol,min_beta=min_beta,rbf_kernel=rbf_kernel,
                      func_bd=func_bd,max_C_fail=max_C_fail,resume_iter=resume_iter,n_iter=n_iter,
                      # optimization results
-                     t_build_mod=t_build_mod[:k+1],t_prop_pt=t_prop_pt[:k+1],
-                     t_eval_pt=t_eval_pt[:k+1],t_update=t_update[:k+1],
-                     opt_sm_arr=opt_sm_arr[:k+1],cv_err_arr=cv_err_arr[:k+1],
-                     gSRS_pct_arr=gSRS_pct_arr[:k+1],n_zoom_arr=n_zoom_arr[:k+1],
-                     best_loc_it=best_loc_it[:init_iter+k+1],
-                     best_val_it=best_val_it[:init_iter+k+1], best_seed_it=best_seed_it[:init_iter+k+1],
+                     t_build_arr=t_build_arr[:k+1],t_prop_arr=t_prop_arr[:k+1],
+                     t_eval_arr=t_eval_arr[:k+1],t_update_arr=t_update_arr[:k+1],
+                     gSRS_pct_arr=gSRS_pct_arr[:k+1],zoom_lv_arr=zoom_lv_arr[:k+1],
                      # state variables
-                     full_restart=full_restart,n_zoom=n_zoom,act_node_ix=act_node_ix,
+                     full_restart=full_restart,zoom_lv=zoom_lv,act_node_ix=act_node_ix,
                      X_all=X_all,Y_all=Y_all,tree=tree,n_full_restart=n_full_restart,
-                     seed_base=seed_base,seed_flat_arr=seed_flat_arr,run_wgt_SRS=run_wgt_SRS,
+                     seed_base=seed_base,seed_flat_arr=seed_flat_arr,
                      X_samp_restart=X_samp_restart)
             
             shutil.copy2(temp_result_npz_file,result_npz_file) # overwrite the original one
@@ -810,11 +774,6 @@ class Optimizer:
                 sys.stderr.log.flush()
         
         # find best point and its (noisy) function value
-        min_ix = np.argmin(best_val_it)
-        best_loc = best_loc_it[min_ix]
-        best_val = best_val_it[min_ix]
-        
-        return best_loc, best_val
         
         
     def doe(self, n_samp=None, criterion='maximin'):
@@ -833,7 +792,7 @@ class Optimizer:
             
             samp (2d array): LHS samples. Each row is one sample.
         """
-        n_samp = int(np.ceil(3/float(self._n_worker)))*self._n_worker if n_samp is None else n_samp
+        n_samp = self._n_doe_samp if n_samp is None else n_samp
         unit_X = lhs(self._dim, samples=n_samp, criterion=criterion) # unit_X: 2d array in unit cube
         samp = np.zeros_like(unit_X)
         for i in range(self._dim):
@@ -841,6 +800,24 @@ class Optimizer:
             
         return samp
     
+    
+    def init_node_state(self):
+        """
+        Initialize the state of a node of the optimization tree.
+        
+        Returns:
+            
+            state (dict): values of state variables.
+        """
+        
+        state = {'p': self._init_p, # p value in the SRS method (controls proportion of Type I candidate points).
+                 'Cr': 0, # counter that counts number of times of reducing the sigma value of local SRS.
+                 'Cf': 0, # counter that counts number of consecutive failures.
+                 'gamma': self._init_gamma # weight exponent parameter of weighted RBF
+                 }
+        
+        return state
+        
     def is_done(self):
         """
         Check whether we are done with the optimization.
