@@ -226,7 +226,7 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
         
         normalize_data (bool, optional): Whether to normalize data before training a RBF model.
         
-        wgt_expon (float, optional): Weight exponent in RBF regression.
+        wgt_expon (float, optional): Weight exponent in RBF regression ('gamma').
             Useful only when `use_scipy_rbf` = False.
         
         use_scipy_rbf (bool, optional): Whether to use Scipy implementation for the RBF model.
@@ -394,13 +394,13 @@ def rbf_wgt(Y, wgt_expon):
         
         Y (1d array): Y values of training data.
         
-        wgt_expon (float): Weight exponent.
+        wgt_expon (float): Weight exponent ('gamma').
     
     Returns:
         
         wgt (1d array): Weights of training data.
     """
-    assert(Y.ndim == 1 and wgt_expon >= 0)
+    assert(Y.ndim == 1)
     
     min_Y, max_Y = np.min(Y), np.max(Y)
     if min_Y == max_Y:
@@ -408,7 +408,7 @@ def rbf_wgt(Y, wgt_expon):
     else:
         Y = (Y-min_Y)/(max_Y-min_Y) # normalization
     assert (np.min(Y) >= 0 and np.max(Y) <= 1) # sanity check
-    wgt = np.exp(-wgt_expon*Y)
+    wgt = np.exp(wgt_expon*Y)
     
     return wgt
  
@@ -432,7 +432,7 @@ def CV_smooth(smooth, X, Y, n_fold, kernel, use_scipy_rbf, wgt_expon, poly_deg):
          
          use_scipy_rbf (bool): Whether to use Scipy implementation for the RBF model.
          
-         wgt_expon (float): Weight exponent in RBF regression.
+         wgt_expon (float): Weight exponent in RBF regression ('gamma').
             Useful only when `use_scipy_rbf` = False.
      
          poly_deg (int): Degree of RBF polynomial tail (either 0 or 1). 

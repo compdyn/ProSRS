@@ -139,4 +139,87 @@ def unique_row(array):
         unique_arr = sorted_arr[row_ix]
         
     return unique_arr
+
  
+def put_back_box(pt, domain):
+    """
+    Put points back to a box-shaped domain, if there are any outside the domain.
+    Any outside points are relocated to their nearest points in the domain.
+    
+    Args:
+        
+        pt (2d array): Points to be put back.
+        
+        domain (list of tuples): Box-shaped domain.
+                For example, `domain` = [(0, 1), (0, 2)] means defining a 2D domain: 
+                with first coordinate in [0, 1] and second coordinate in [0, 2].
+        
+    Returns:
+        
+        uniq_pt (2d array): Unique points after being put back (any duplicated points are squashed).
+        
+        raw_pt (2d array): Original points after being put back (with possible duplicate points).
+    """
+    n_pt, dim = pt.shape
+    assert(len(domain)==dim)
+    
+    for j in range(dim):
+        min_bd = domain[j][0]
+        max_bd = domain[j][1]
+        assert(max_bd > min_bd)
+        if j == 0:
+            ind = np.logical_and(pt[:, j] > min_bd,pt[:, j] < max_bd) # indicator that shows if a number is inside the range
+        else:
+            ind = np.logical_or(ind, np.logical_and(pt[:, j] > min_bd,pt[:, j] < max_bd))
+        pt[:, j] = np.maximum(min_bd, np.minimum(max_bd, pt[:, j]))       
+    pt_1 = pt[ind]
+    pt_2 = pt[np.logical_not(ind)]
+    raw_pt = np.vstack((pt_1, pt_2))
+    pt_2 = unique_row(pt_2) # find unique points
+    uniq_pt = np.vstack((pt_1, pt_2))
+    
+    return uniq_pt, raw_pt
+
+
+def scale_zero_one(arr):
+    """
+    Scale an array to the range [0, 1] with minimum corresponding to 0 
+    and maximum to 1.
+    
+    Args:
+        
+        arr (array): Array to be scaled.
+        
+    Returns:
+        
+        scale_arr (array): Scaled array (same shape as `arr`).
+    """
+    max_arr, min_arr = np.amax(arr), np.amin(arr)
+    if max_arr != min_arr:
+        scale_arr = (arr-min_arr)/(max_arr-min_arr)
+    else:
+        scale_arr = np.ones_like(arr)
+        
+    return scale_arr
+
+
+def scale_one_zero(arr):
+    """
+    Scale an array to the range [0, 1] with minimum corresponding to 1 
+    and maximum to 0.
+    
+    Args:
+        
+        arr (array): Array to be scaled.
+        
+    Returns:
+        
+        scale_arr (array): Scaled array (same shape as `arr`).
+    """         
+    max_arr, min_arr = np.amax(arr), np.amin(arr)
+    if max_arr != min_arr:
+        scale_arr = (max_arr-arr)/(max_arr-min_arr)
+    else:
+        scale_arr = np.ones_like(arr)
+        
+    return scale_arr

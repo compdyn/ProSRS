@@ -8,11 +8,14 @@ Implement ProSRS algorithm.
 """
 import numpy as np
 import os, sys
+from timeit import default_timer
 from pyDOE import lhs
+from scipy.spatial.distance import cdist
 from pathos.multiprocessing import ProcessingPool as Pool
 from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP
 from ..utility.classes import std_out_logger, std_err_logger
-from ..utility.functions import eval_func
+from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one
+from .surrogate import RBF_reg
 #TODO: change 'processes=' to 'nodes=' for pool initialization.
 #TODO: change 'wgt_expon' to 'gamma'. "wgt_expon = - gamma". Change rbf_wgt() and optimizer function accordingly.
 
@@ -101,6 +104,7 @@ class Optimizer:
         self._n_cand = self._n_cand_fact * self._dim # number of candidate points in SRS method
         self._state_npz_file = os.path.join(self._out_dir, STATE_NPZ_FILE_TEMP % self._prob.name) # file that saves optimizer state (useful for resume)
         self._state_pkl_file = os.path.join(self._out_dir, STATE_PKL_FILE_TEMP % self._prob.name) # file that saves optimizer state (useful for resume)
+        self._pool_rbf = Pool() if self._n_proc_master is None else Pool(nodes=self._n_proc_master)
         
         # sanity check
         # TODO: check the type of `self._prob`
@@ -136,7 +140,8 @@ class Optimizer:
             self.i_restart = 0 # restart index (how many restarts have been initiated)
             self.doe_samp = self.doe() # DOE samples
             self.i_iter_doe = 0 # iteration index during DOE phase (how many DOE iterations have been run in current restart cycle)
-            self.t_build_arr = np.zeros(0) # time of building a RBF model for each iteration. If an iteration is DOE, = np.nan.  
+            self.t_build_arr = np.zeros(0) # time of building a RBF model for each iteration. If an iteration is DOE, = 0.  
+            self.t_srs_arr = np.zeros(0) # time of running SRS method for each iteration. If an iteration is DOE, = 0. 
             self.t_prop_arr = np.zeros(0) # time of proposing new points for each iteration.
             self.t_eval_arr = np.zeros(0) # time of evaluating proposed points for each iteration.
             self.t_update_arr = np.zeros(0) # time of updating the optimizer state for each iteration.
@@ -151,12 +156,12 @@ class Optimizer:
             self.random_state = np.random.get_state() # FIXME: check necessity of passing random state within the class.
             self.zoom_lv = 0 # zoom level (zero-based).
             self.act_node_ix = 0 # index of the activate node for the zoom level `self.zoom_lv` (zero-based).
-            self.srs_wgt_pat = np.linspace(self._wgt_pat_bd[0], self._wgt_pat_bd[1], self._n_proc_master) # weight pattern in the SRS method.
+            self.srs_wgt_pat = np.linspace(self._wgt_pat_bd[0], self._wgt_pat_bd[1], self._n_worker) # weight pattern in the SRS method.
             # initialize optimization tree
-            self.tree = {self.zoom_lv: [{'ix': np.arange(self._n_doe_samp, dtype=int), # indice of samples for the tree node (w.r.t. `self.x_all` or `self.y_all`).
-                                         'bd': self._prob.domain, # domain of the tree node.
+            self.tree = {self.zoom_lv: [{'ix': np.arange(self._n_doe_samp, dtype=int), # indice of data for the tree node (w.r.t. `self.x_all` or `self.y_all`).
+                                         'domain': self._prob.domain, # domain of the tree node.
                                          'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent.
-                                         'zp': self._init_beta, # zoom-out probability.
+                                         'beta': self._init_beta, # zoom-out probability.
                                          'state': self.init_node_state() # state of the tree node.
                                          }]}
             
@@ -346,6 +351,7 @@ class Optimizer:
             # read optimization results from previous experiment
             t_build_arr[:resume_opt_iter] = data['t_build_arr']
             t_prop_arr[:resume_opt_iter] = data['t_prop_arr']
+            t_srs_arr[:resume_opt_iter] = data['t_srs_arr']
             t_eval_arr[:resume_opt_iter] = data['t_eval_arr']
             t_update_arr[:resume_opt_iter] = data['t_update_arr']
             gSRS_pct_arr[:resume_opt_iter] = data['gSRS_pct_arr']
@@ -374,78 +380,11 @@ class Optimizer:
             
             tt1 = default_timer()
             
-            ########### Read activated node #######
-                
-            # get activated node
-            act_node = tree[zoom_lv][act_node_ix]
-            # get samples of the node
-            X_samp = X_all[act_node['ix']]
-            Y_samp = Y_all[act_node['ix']]
-            # get variables
-            gSRS_pct_full = act_node['state']['p']
-            n_reduce_step_size = act_node['state']['Cr']
-            n_fail = act_node['state']['Cf']
-            gamma = act_node['state']['gamma']
-            zoom_out_prob = act_node['zp']
-            fit_bd = act_node['bd']
+            
                     
             if not full_restart:
                     
-                ########### Fit model ##############
-                
-                t1 = default_timer()
-    
-                rbf_mod,opt_sm,cv_err,_ = RBF_reg(X_samp,Y_samp,n_core_node,lambda_range,
-                                                  normalize_data=normalize_data,gamma=gamma,
-                                                  n_fold=n_fold,kernel=rbf_kernel,pool=pool_rbf,
-                                                  poly_deg=rbf_poly_deg)                
-                t2 = default_timer()
-
-                t_build_arr[k] = t2-t1
-                
-                if verbose:
-                    print('time to build model = %.2e sec' % t_build_arr[k])
-                    
-                ########### Propose points for next iteration ############## 
-                
-                t1 = default_timer()
-                
-                # find gSRS_pct
-                gSRS_pct = np.floor(10*gSRS_pct_full)/10.
-                assert(0<=gSRS_pct<=1)
-                
-                if verbose:
-                    print('act_node_ix = %d' % act_node_ix)
-                    print('gamma = %g' % gamma)
-                    print('opt_sm = %.1e' % opt_sm)
-                    print('gSRS_pct = %g' % gSRS_pct)
-                    print('n_fail = %d' % n_fail)
-                    print('n_reduce_step_size = %d' % n_reduce_step_size)
-                    print('sigma = %g' % (init_sigma*0.5**n_reduce_step_size))
-                    print('zoom_out_prob = %g' % zoom_out_prob)
-                    print('zoom_lv = %d' % zoom_lv)
-                    print('fit_bd =')
-                    print(fit_bd)
-                    
-                # find x_star
-                Y_fit = rbf_mod(X_samp)
-                min_ix = np.argmin(Y_fit)
-                x_star = X_samp[min_ix]
-                
-                if n_proc == 1:
-                    # prepare for next iteration
-                    srs_wgt_pat = np.array([wgt_pat_bd[0]]) if srs_wgt_pat[0] == wgt_pat_bd[1] else np.array([wgt_pat_bd[1]])
-                
-                prop_pt_arr = propose(gSRS_pct,x_star,rbf_mod,n_reduce_step_size,srs_wgt_pat,fit_bd,X_samp)
-                
-                assert(np.all([bd[0]<=x_star[j]<=bd[1] for j,bd in enumerate(fit_bd)])) # sanity check
-                
-                t2 = default_timer()
-                
-                t_prop_arr[k] = t2-t1
-                
-                if verbose:
-                    print('time to propose points = %.2e sec' % t_prop_arr[k])
+                pass
         
             else:
                 
@@ -495,16 +434,16 @@ class Optimizer:
             if not full_restart:
                     
                 if n_proc > 1 or (n_proc == 1 and srs_wgt_pat[0] == wgt_pat_bd[0]):
-                    if gSRS_pct_full >= 0.1:
-                        # compute gSRS_pct_full
+                    if p_val >= 0.1:
+                        # compute p_val
                         if use_eff_n_samp:
-                            eff_n = eff_n_samp(X_all[act_node['ix']],act_node['bd'])
+                            eff_n = eff_n_samp(X_all[act_node['ix']],act_node['domain'])
                         else:
                             eff_n = len(X_all[act_node['ix']])
-                        gSRS_pct_full = gSRS_pct_full*eff_n**(-alpha/float(dim))
+                        p_val = p_val*eff_n**(-alpha/float(dim))
                         
                     if gSRS_pct == 0: # i.e. pure local SRS
-                        best_Y_prev = np.min(Y_samp)
+                        best_Y_prev = np.min(y_node)
                         best_Y_new = np.min(Y_prop_pt) # minimum of Y values of newly proposed points
                         if best_Y_prev <= best_Y_new: # failure                
                             n_fail += 1 # count failure
@@ -513,9 +452,9 @@ class Optimizer:
                         if n_fail == max_C_fail:
                             n_fail = 0
                             gamma += delta_gamma
-                            n_reduce_step_size += 1 # update counter
-                    act_node['state']['p'] = gSRS_pct_full
-                    act_node['state']['Cr'] = n_reduce_step_size
+                            n_reduce_sigma += 1 # update counter
+                    act_node['state']['p'] = p_val
+                    act_node['state']['Cr'] = n_reduce_sigma
                     act_node['state']['Cf'] = n_fail
                     act_node['state']['gamma'] = gamma
             
@@ -550,7 +489,7 @@ class Optimizer:
                
             if not full_restart:
                 
-                if n_reduce_step_size > max_n_reduce_sigma:
+                if n_reduce_sigma > max_n_reduce_sigma:
                     # then we either restart or zoom-in
                     Y_fit = rbf_mod(X_all[act_node['ix']])
                     min_ix = np.argmin(Y_fit)
@@ -566,16 +505,16 @@ class Optimizer:
                         fit_ub = np.minimum(x_star+rho/2.0*blen,fit_ub)
                         fit_bd = list(zip(fit_lb,fit_ub)) # the list function is used to ensure compatibility of python3
                         child_node = {'ix': np.nonzero(get_box_samp(X_all,fit_bd)[0])[0], 
-                                      'bd': fit_bd,
+                                      'domain': fit_bd,
                                       'parent_ix': act_node_ix,
-                                      'zp': init_beta,
+                                      'beta': init_beta,
                                       'state': init_node_state()}
                     else:
                         # then we activate an existing child node (if zoom in)
                         child_node = tree[zoom_lv+1][child_node_ix]
-                        child_node['ix'] = np.nonzero(get_box_samp(X_all,child_node['bd'])[0])[0]
+                        child_node['ix'] = np.nonzero(get_box_samp(X_all,child_node['domain'])[0])[0]
                     n_samp = len(child_node['ix'])
-                    fit_lb, fit_ub = zip(*child_node['bd'])
+                    fit_lb, fit_ub = zip(*child_node['domain'])
                     blen = np.array(fit_ub)-np.array(fit_lb) # bound length for each dimension
                     assert(np.min(blen)>0)
                     
@@ -589,9 +528,9 @@ class Optimizer:
                         X_all = np.zeros((0,dim))
                         Y_all = np.zeros(0)
                         tree = {zoom_lv: [{'ix': np.arange(0,dtype=int), # indice of samples for the node (with respect to X_all and Y_all)
-                                          'bd': func_bd, # domain of the node
+                                          'domain': func_bd, # domain of the node
                                           'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent
-                                          'zp': init_beta, # zoom-out probability
+                                          'beta': init_beta, # zoom-out probability
                                           'state': init_node_state() # state of the node
                                           }]}
                     else:
@@ -615,20 +554,20 @@ class Optimizer:
                             # then activate existing child node
                             act_node_ix = child_node_ix
                             # reduce zoom-out probability
-                            child_node['zp'] = max(min_beta,child_node['zp']/2.)
+                            child_node['beta'] = max(min_beta,child_node['beta']/2.)
                             
                             if verbose:
                                 print('Zoom in (activate an existing child node)!')
                                 
                 if n_proc > 1 or (n_proc == 1 and srs_wgt_pat[0] == wgt_pat_bd[0]):            
-                    if np.random.uniform() < tree[zoom_lv][act_node_ix]['zp'] and zoom_lv > 0 and not full_restart:
+                    if np.random.uniform() < tree[zoom_lv][act_node_ix]['beta'] and zoom_lv > 0 and not full_restart:
                         # then we zoom out
                         child_node = tree[zoom_lv][act_node_ix]
                         act_node_ix = child_node['parent_ix']
                         zoom_lv -= 1
                         assert(act_node_ix is not None)
                         # check that the node after zooming out will contain the current node
-                        assert(intsect_bd(tree[zoom_lv][act_node_ix]['bd'],child_node['bd']) == child_node['bd']) 
+                        assert(intsect_bd(tree[zoom_lv][act_node_ix]['domain'],child_node['domain']) == child_node['domain']) 
                         
                         if verbose:
                             print('Zoom out!')
@@ -681,6 +620,7 @@ class Optimizer:
                      func_bd=func_bd,max_C_fail=max_C_fail,resume_iter=resume_iter,n_iter=n_iter,
                      # optimization results
                      t_build_arr=t_build_arr[:k+1],t_prop_arr=t_prop_arr[:k+1],
+                     t_srs_arr=t_srs_arr[:k+1],
                      t_eval_arr=t_eval_arr[:k+1],t_update_arr=t_update_arr[:k+1],
                      gSRS_pct_arr=gSRS_pct_arr[:k+1],zoom_lv_arr=zoom_lv_arr[:k+1],
                      # state variables
@@ -759,8 +699,10 @@ class Optimizer:
             
             new_pt (2d array): Proposed new points. Each row is one point.
         """
-        # FIXME: add verbose
+        # FIXME: check verbose
         np.random.set_state(self.random_state)
+        
+        tt1 = default_timer()
         
         if self.i_iter_doe < self._n_iter_doe:
             # i.e., current iteration is in DOE phase
@@ -768,70 +710,143 @@ class Optimizer:
         else:
             # i.e., current iteration is in true optimization phase
             
-            # TODO: to be continued
+            ########### Get activated node ##############
             
+            self.act_node = self.tree[self.zoom_lv][self.act_node_ix]
+            self.x_node = self.x_all[self.act_node['ix']] # get X data of the node
+            self.y_node = self.y_all[self.act_node['ix']] # get Y data of the node
+            self.p_val = self.act_node['state']['p']
+            self.n_reduce_sigma = self.act_node['state']['Cr']
+            self.n_fail = self.act_node['state']['Cf']
+            self.gamma = self.act_node['state']['gamma']
+            self.gSRS_pct = np.floor(10*self.p_val)/10. # pertentage of global SRS (= percentage of Type I candidates)
+            self.sigma = self._init_sigma*0.5**self.n_reduce_sigma
             
+            ########### Build RBF surrogate model ##############
+                
+            t1 = default_timer()
+            
+            # FIXME: we may not need `opt_sm` eventually
+            self.rbf_mod, opt_sm, _, _ = RBF_reg(self.x_node, self.y_node, self._lambda_range,
+                                            normalize_data=self._normalize_data, wgt_expon=self.gamma,
+                                            n_fold=self._n_fold, kernel=self._rbf_kernel, pool=self._pool_rbf,
+                                            poly_deg=self._rbf_poly_deg)                
+            t2 = default_timer()
+            self.t_build = t2-t1
+            
+            if verbose:
+                print('time to build RBF surrogate = %.2e sec' % self.t_build)
+                
+            ########### Propose new points using SRS method ############## 
+            
+            t1 = default_timer()
+            
+            new_pt = self.SRS()
+            
+            t2 = default_timer()
+            self.t_srs = t2-t1
+            
+            if verbose:
+                print('act_node_ix = %d' % self.act_node_ix)
+                print('gamma = %g' % self.gamma)
+                print('opt_sm = %.1e' % opt_sm)
+                print('gSRS_pct = %g' % self.gSRS_pct)
+                print('n_fail = %d' % self.n_fail)
+                print('n_reduce_sigma = %d' % self.n_reduce_sigma)
+                print('sigma = %g' % self.sigma)
+                print('zoom_out_prob = %g' % self.act_node['beta'])
+                print('zoom_lv = %d' % self.zoom_lv)
+                print('node_domain =')
+                print(self.act_node['domain'])
+            
+        tt2 = default_timer()
+        self.t_prop = tt2-tt1
         
+        if verbose:
+            print('time to propose new points = %.2e sec' % self.t_prop)
+            
         self.random_state = np.random.get_state()
         
         return new_pt
         
+    
+    def SRS(self):
+        """
+        Propose new points using SRS method.
         
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        if gSRS_pct == 1:
+        Returns:
             
-            #### pure global SRS ####
-            
+            new_pt (2d array): Proposed points.
+        """        
+        # generate candidate points
+        if self.gSRS_pct == 1:            
             # generate candidate points uniformly (global SRS)
-            cand_pt = np.zeros((n_cand,dim))
-            for d,bd in enumerate(fit_bd):
-                cand_pt[:,d] = np.random.uniform(low=bd[0],high=bd[1],size=n_cand)
-            prop_pt_arr = SRS(rbf_mod,cand_pt,X_samp,wgt_pat_arr)
-                    
+            cand_pt = np.zeros((self._n_cand, self._dim))
+            for d, bd in enumerate(self.act_node['domain']):
+                cand_pt[:, d] = np.random.uniform(low=bd[0], high=bd[1], size=self._n_cand)
         else:
-            #### global-local SRS (possibly pure local SRS) ####
-            
-            # get number of candidate points for both global and local SRS
-            n_cand_gSRS = int(np.round(n_cand*gSRS_pct))
-            n_cand_lSRS = n_cand-n_cand_gSRS # total number of candidate points for local SRS
-            assert (n_cand_lSRS>0) # sanity check
-            
+            n_cand_gSRS = int(np.round(self._n_cand*self.gSRS_pct)) # number of candidate points for global SRS
+            n_cand_lSRS = self._n_cand-n_cand_gSRS # number of candidate points for local SRS
+            assert(n_cand_lSRS > 0) # sanity check
             # generate candidate points uniformly (global SRS)           
-            cand_pt = np.zeros((n_cand_gSRS,dim))
-            if n_cand_gSRS>0:
-                for d,bd in enumerate(fit_bd):
-                    cand_pt[:,d] = np.random.uniform(low=bd[0],high=bd[1],size=n_cand_gSRS)
-            
-            # find step size (i.e. std) for each coordinate of x_star
-            sigma = init_sigma*0.5**n_reduce_step_size
-            step_size_arr = np.array([sigma*(x[1]-x[0]) for x in fit_bd])
-            assert(np.min(step_size_arr)>0) # sanity check
-            
-            # generate candidate points (gaussian about x_star, local SRS)
-            cand_pt_lSRS = np.random.multivariate_normal(x_star,\
-                                                         np.diag(step_size_arr**2),n_cand_lSRS)
-            # add to candidate points
-            cand_pt = np.vstack((cand_pt,cand_pt_lSRS))
-            
+            cand_pt_gSRS = np.zeros((n_cand_gSRS, self._dim))
+            if n_cand_gSRS > 0:
+                for d, bd in enumerate(self.act_node['domain']):
+                    cand_pt_gSRS[:, d] = np.random.uniform(low=bd[0], high=bd[1], size=n_cand_gSRS)
+            # find x_star
+            Y_fit = self.rbf_mod(self.x_node)
+            min_ix = np.argmin(Y_fit)
+            x_star = self.x_node[min_ix]
+            assert(np.all([bd[0] <= x_star[j] <= bd[1] for j,bd in enumerate(self.act_node['domain'])])) # sanity check
+            # find step size (i.e. std) for each coordinate of `x_star`
+            step_size_arr = np.array([self.sigma*(bd[1]-bd[0]) for bd in self.act_node['domain']])
+            assert(np.min(step_size_arr) > 0) # sanity check
+            # generate candidate points (Gaussian about x_star, local SRS)
+            cand_pt_lSRS = np.random.multivariate_normal(x_star, np.diag(step_size_arr**2), n_cand_lSRS)
+            # combine two types of candidate points
+            comb_cand_pt = np.vstack((cand_pt_gSRS, cand_pt_lSRS))
             # put candidate points back to the domain, if there's any outside
-            cand_pt, cand_pt_raw = put_back_box(cand_pt,fit_bd)
-            if len(cand_pt) >= n_prop:
-                prop_pt_arr = SRS(rbf_mod,cand_pt,X_samp,wgt_pat_arr)
+            uniq_cand_pt, raw_cand_pt = put_back_box(comb_cand_pt, self.act_node['domain'])
+            # get candidate points (``len(uniq_cand_pt) < n_worker`` is pathological case, almost never encountered in practice)
+            cand_pt = uniq_cand_pt if len(uniq_cand_pt) >= self._n_worker else raw_cand_pt
+        
+        # select new points from candidate points
+        n_cand = len(cand_pt)
+        assert(n_cand >= self._n_worker)
+        resp_cand = self.rbf_mod(cand_pt)
+        resp_score = scale_zero_one(resp_cand) # response score
+        # initializations
+        new_pt = np.zeros((self._n_worker, self._dim))
+        refer_pt = self.x_node.copy() # reference points based on which we compute distance scores
+        # select points sequentially
+        for j in range(self._n_worker):
+            wt = self.srs_wgt_pat[j]
+            if len(refer_pt) > 0:
+                if j == 0:                                       
+                    # distance matrix for `refer_pt` and `cand_pt`
+                    dist_mat = cdist(cand_pt, refer_pt)   
+                    dist_cand = np.amin(dist_mat, axis=1)                        
+                else:
+                    # distance to the previously proposed point
+                    dist_prop_pt = cdist(cand_pt, new_pt[j-1].reshape((1, -1))).flatten()                    
+                    dist_cand = np.minimum(dist_cand, dist_prop_pt)
+                dist_score = scale_one_zero(dist_cand) # distance score
             else:
-                # this rarely happens, then we use raw candidate point (possibly with duplicate points)
-                prop_pt_arr = SRS(rbf_mod,cand_pt_raw,X_samp,wgt_pat_arr)
+                # pathological case
+                dist_score = np.zeros(n_cand) # distance score
+            cand_score = resp_score*wt+(1-wt)*dist_score # candidate score        
+            assert (np.amax(cand_score)<=1 and np.amin(cand_score)>=0) # sanity check            
+            # select the best one based on the score
+            min_ix = np.argmin(cand_score)
+            new_pt[j] = cand_pt[min_ix]           
+            # update variables
+            refer_pt = np.vstack((refer_pt, new_pt[j].reshape(1, -1)))
+            dist_cand = np.delete(dist_cand, min_ix)
+            resp_score = np.delete(resp_score, min_ix)
+            cand_pt = np.delete(cand_pt, min_ix, axis=0)
+            n_cand -= 1
             
-        return prop_pt_arr
+        return new_pt
         
     
     def update(self, new_x, new_y, verbose=True):
@@ -850,17 +865,29 @@ class Optimizer:
         np.random.set_state(self.random_state)
         
         if self.i_iter_doe < self._n_iter_doe: # i.e., current iteration is in DOE phase
-            self.i_iter_doe += 1    
+            self.i_iter_doe += 1  
+        else:
+            if self._n_worker == 1:
+                # alternating weight pattern in SRS method
+                self.srs_wgt_pat = np.array([self._wgt_pat_bd[0]]) if self.srs_wgt_pat[0] == self._wgt_pat_bd[1] else np.array([self._wgt_pat_bd[1]])
         self.i_iter += 1
         
         # TODO: to be continued
         
         if restart: # FIXME: fix `restart` variable: we need to do at least the following:
+            # reset variables
             self.i_iter_doe = 0
             self.doe_samp = self.doe()
             self.i_restart += 1
             
+            
             # TODO: to be continued
+        
+        # save variables
+        assert(0 <= self.gSRS_pct <= 1)
+        self.gSRS_pct_arr = np.append(self.gSRS_pct_arr, self.gSRS_pct)
+        self.t_build_arr = np.append(self.t_build_arr, self.t_build)
+        # TODO: to be continued
         
         self.random_state = np.random.get_state()
         
