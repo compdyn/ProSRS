@@ -14,10 +14,8 @@ from scipy.spatial.distance import cdist
 from pathos.multiprocessing import ProcessingPool as Pool
 from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP
 from ..utility.classes import std_out_logger, std_err_logger
-from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one
+from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one, eff_npt, boxify, domain_intersect
 from .surrogate import RBF_reg
-#TODO: change 'processes=' to 'nodes=' for pool initialization.
-#TODO: change 'wgt_expon' to 'gamma'. "wgt_expon = - gamma". Change rbf_wgt() and optimizer function accordingly.
 
 
 class Optimizer:
@@ -147,7 +145,7 @@ class Optimizer:
             self.t_update_arr = np.zeros(0) # time of updating the optimizer state for each iteration.
             self.gSRS_pct_arr = np.zeros(0) # pertentage of global SRS (= percentage of Type I candidates = floor(10*p_val)/10.) for each iteration.
             self.zoom_lv_arr = np.zeros(0) # zoom level at the time of proposing new points for each iteration.
-            self.x_all = np.zeros((0, self._dim)) # all the evaluated (proposed) points so far.
+            self.x_all = np.zeros((0, self._dim)) # all the evaluated (proposed) points so far in a tree.
             self.y_all = np.zeros(0) # (noisy) y values of `self.x_all`.
             self.seed_all = np.zeros(0) # random seeds for points in `self.x_all`.
             self.best_x = np.ones(self._dim)*np.nan # best point so far.
@@ -157,25 +155,12 @@ class Optimizer:
             self.zoom_lv = 0 # zoom level (zero-based).
             self.act_node_ix = 0 # index of the activate node for the zoom level `self.zoom_lv` (zero-based).
             self.srs_wgt_pat = np.linspace(self._wgt_pat_bd[0], self._wgt_pat_bd[1], self._n_worker) # weight pattern in the SRS method.
-            # initialize optimization tree
-            self.tree = {self.zoom_lv: [{'ix': np.arange(self._n_doe_samp, dtype=int), # indice of data for the tree node (w.r.t. `self.x_all` or `self.y_all`).
-                                         'domain': self._prob.domain, # domain of the tree node.
-                                         'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent.
-                                         'beta': self._init_beta, # zoom-out probability.
-                                         'state': self.init_node_state() # state of the tree node.
-                                         }]}
-            
-            # TODO: possibly initialize more variables hereafter
-            
+            self.tree = self.init_tree() # initialize optimization tree    
         else:
             # load optimizer state from the last run
             self.load_state()
-            
-        # TODO: to be continued
         
-        
-        
-        
+    
     def __str__(self, verbose_level=1):
         """
         Display optimizer status.
@@ -203,7 +188,7 @@ class Optimizer:
                 If None, then standard errors will not be saved to a file.
             
         """            
-        # log standard outputs and standard errors to files
+        # Log standard outputs and standard errors.
         # Here we write to a new file if we do not resume. Otherwise, we append to the old file.
         if std_out_file is not None:
             if not self._resume:
@@ -231,413 +216,7 @@ class Optimizer:
                 # TODO: display some summary of results
                 pass
             
-            
-            
-        
-        ########################### Main program ############################
-        
-        if resume_iter is None:
-            
-            ########### Initial sampling (DOE) ################ 
-            
-            np.random.seed(int(seed))
-            
-            t1 = default_timer()
-            
-            n_init_samp = n_proc*init_iter
-            X_all = doe(n_init_samp,func_bd)
-                
-            t2 = default_timer()
-            
-            t_doe = t2-t1
-            
-            ########### Evaluate DOE ################
-            
-            t_eval = np.zeros(init_iter)
-            
-            seed_base = seed+1
-            seed_flat_arr = np.array([])
-            
-            # initialization
-            Y_all = np.zeros(n_init_samp)
-            for k in range(init_iter):
-                ix1,ix2 = k*n_proc,(k+1)*n_proc
-                X = X_all[ix1:ix2]
-                seed_arr = seed_base+np.arange(n_proc)
-                seed_flat_arr = np.append(seed_flat_arr,seed_arr) # update seed_flat_arr for sanity check
-                seed_base += n_proc
-                out_list = [os.path.join(outdir, RESULT_SAMP_FILE_TEMP % (prob_name,k+1,n+1)) \
-                            for n in range(n_proc)]
-                t1 = default_timer()
-                # evaluate function
-                Y = func_eval(obj_func,X,seed_arr,out_list,pool_eval,comm)
-                t2 = default_timer()
-                t_eval[k] = t2-t1
-                # save Y
-                Y_all[ix1:ix2] = Y
-                
-                # save to netcdf file
-                if save_samp:
-                    out_file = os.path.join(outdir, RESULT_GENERAL_SAMP_FILE_TEMP % (prob_name,k+1))
-                    if os.path.isfile(out_file):
-                        os.remove(out_file) # remove file if exists
-                    with netcdf.netcdf_file(out_file,'w') as f:
-                        f.createDimension('var',dim)
-                        f.createDimension('samp',n_proc)
-                        nc_samp = f.createVariable('x','d',('samp','var'))
-                        nc_samp[:] = X
-                        nc_samp = f.createVariable('y','d',('samp',))
-                        nc_samp[:] = Y
-                        nc_seed = f.createVariable('seed','i',('samp',))
-                        nc_seed[:] = seed_arr
-                        nc_wall_time = f.createVariable('tw_eval','d',())
-                        nc_wall_time.assignValue(t_eval[k])
-                        nc_wall_time = f.createVariable('tw_doe','d',())
-                        nc_wall_time.assignValue(t_doe)
-            
-            # sanity check
-            assert(np.all(seed_flat_arr == np.arange(np.min(seed_flat_arr),np.max(seed_flat_arr)+1)))
-        
-        
-            ######### Initializations for optimization ########
-                
-            # count number of full restart
-            n_full_restart = 0
-            # full restart flag
-            full_restart = False
-            # doe samples for restart (useful for resume)
-            X_samp_restart = np.zeros((0,dim))
-        
-        else:
-            
-            t1 = default_timer()
-            
-            resume_opt_iter = resume_iter-init_iter
-            resume_opt_iter = int(resume_opt_iter) # convert to integer type if not
-            # remove lock file if exists
-            result_npz_lock_file = result_npz_file+'.lock'
-            if os.path.isfile(result_npz_lock_file):
-                os.remove(result_npz_lock_file)
-            # read experiment conditions from previous trials
-            data = np.load(result_npz_file)
-            assert(resume_opt_iter==data['opt_iter']), \
-            'Please resume from where it ended last time by setting resume_iter = %d' % (data['opt_iter']+init_iter)
-    
-            # sanity check for consistency of experiment conditions
-            assert(init_iter==data['init_iter'] and n_proc==data['n_proc'] and seed==data['seed']
-                   and np.all(func_bd==data['func_bd']) and n_core_node==data['n_core_node']
-                   and n_cand_fact==data['n_cand_fact'] and alpha==data['alpha'] 
-                   and normalize_data==data['normalize_data'] and init_gamma==data['init_gamma']
-                   and delta_gamma==data['delta_gamma'] and max_n_reduce_sigma==data['max_n_reduce_sigma']
-                   and rho==data['rho'] and np.all(init_sigma==data['init_sigma'])
-                   and init_p==data['init_p'] and np.all(wgt_pat_bd==data['wgt_pat_bd'])
-                   and np.all(lambda_range==data['lambda_range'])
-                   and n_fold==data['n_fold'] and resol==data['resol'] and min_beta==data['min_beta']
-                   and init_beta==data['init_beta'] and max_C_fail==data['max_C_fail']
-                   and use_eff_n_samp==data['use_eff_n_samp'] and rbf_kernel==data['rbf_kernel'])
-            
-            # read status variables from previous experiment
-            full_restart = data['full_restart'].item(0)
-            X_samp_restart = data['X_samp_restart']
-            zoom_lv = data['zoom_lv'].item(0)
-            act_node_ix = data['act_node_ix'].item(0)
-            X_all = data['X_all']
-            Y_all = data['Y_all']
-            tree = data['tree'].item(0)
-            n_full_restart = data['n_full_restart'].item(0)
-            seed_base = data['seed_base'].item(0)
-            seed_flat_arr = data['seed_flat_arr']
-            
-            # read optimization results from previous experiment
-            t_build_arr[:resume_opt_iter] = data['t_build_arr']
-            t_prop_arr[:resume_opt_iter] = data['t_prop_arr']
-            t_srs_arr[:resume_opt_iter] = data['t_srs_arr']
-            t_eval_arr[:resume_opt_iter] = data['t_eval_arr']
-            t_update_arr[:resume_opt_iter] = data['t_update_arr']
-            gSRS_pct_arr[:resume_opt_iter] = data['gSRS_pct_arr']
-            zoom_lv_arr[:resume_opt_iter] = data['zoom_lv_arr']
-            
-            # load random state
-            result_pkl_lock_file = result_pkl_file+'.lock'
-            if os.path.isfile(result_pkl_lock_file):
-                os.remove(result_pkl_lock_file)
-            with open(result_pkl_file, 'rb') as f:
-                np.random.set_state(pickle.load(f))
-                
-            t2 = default_timer()
-            t_resume = t2-t1
-            if verbose:
-                print('\ntime to prepare resume = %.2e sec' % t_resume)
-        
-        ########### Optimization iterations ################
-        
-        start_iter = 0 if resume_iter is None else resume_opt_iter
-        
-        for k in range(start_iter,opt_iter):
-            
-            if verbose:
-                print('\nStart optimization iteration = %d/%d' % (k+1,opt_iter))
-            
-            tt1 = default_timer()
-            
-            
-                    
-            if not full_restart:
-                    
-                pass
-        
-            else:
-                
-                # i.e. do full restart
-                if n_full_restart == 0:
-                    n_init_samp = n_proc*init_iter
-                    X_samp_restart = doe(n_init_samp,func_bd)
-                
-                ix1, ix2 = n_full_restart*n_proc, (n_full_restart+1)*n_proc
-                prop_pt_arr = X_samp_restart[ix1:ix2]
-                
-                gSRS_pct = np.nan
-            
-            tm1 = default_timer()        
-            # save variables
-            gSRS_pct_arr[k] = gSRS_pct # save gSRS_pct
-            zoom_lv_arr[k] = zoom_lv # save zoom_lv
-            
-            ############ Evaluate proposed points #############
-            
-            seed_arr = seed_base+np.arange(n_proc)
-            seed_flat_arr = np.append(seed_flat_arr,seed_arr) # update seed_flat_arr for sanity check
-            seed_base += n_proc
-            out_list = [os.path.join(outdir, RESULT_SAMP_FILE_TEMP % (prob_name,k+init_iter+1,n+1)) \
-                        for n in range(n_proc)]
-            t1 = default_timer()
-            Y_prop_pt = func_eval(obj_func,prop_pt_arr,seed_arr,out_list,pool_eval,comm)
-            t2 = default_timer()
-            Y_prop_pt = np.array(Y_prop_pt)
-            assert(len(prop_pt_arr) == len(Y_prop_pt) == n_proc)
-            
-            assert(np.all(seed_flat_arr == np.arange(np.min(seed_flat_arr),np.max(seed_flat_arr)+1)))
-            
-            t_eval_arr[k] = t2-t1
-            
-            if verbose:
-                print('time to evaluate points = %.2e sec' % t_eval_arr[k])
-            
-            # update node
-            n_X_all = len(X_all)
-            act_node['ix'] = np.append(act_node['ix'], np.arange(n_X_all,n_X_all+n_proc,dtype=int))
-            # update samples
-            X_all = np.vstack((X_all,prop_pt_arr))
-            Y_all = np.append(Y_all,Y_prop_pt)
-                
-            # update state of the current node
-            if not full_restart:
-                    
-                if n_proc > 1 or (n_proc == 1 and srs_wgt_pat[0] == wgt_pat_bd[0]):
-                    if p_val >= 0.1:
-                        # compute p_val
-                        if use_eff_n_samp:
-                            eff_n = eff_n_samp(X_all[act_node['ix']],act_node['domain'])
-                        else:
-                            eff_n = len(X_all[act_node['ix']])
-                        p_val = p_val*eff_n**(-alpha/float(dim))
-                        
-                    if gSRS_pct == 0: # i.e. pure local SRS
-                        best_Y_prev = np.min(y_node)
-                        best_Y_new = np.min(Y_prop_pt) # minimum of Y values of newly proposed points
-                        if best_Y_prev <= best_Y_new: # failure                
-                            n_fail += 1 # count failure
-                        else:
-                            n_fail = 0
-                        if n_fail == max_C_fail:
-                            n_fail = 0
-                            gamma += delta_gamma
-                            n_reduce_sigma += 1 # update counter
-                    act_node['state']['p'] = p_val
-                    act_node['state']['Cr'] = n_reduce_sigma
-                    act_node['state']['Cf'] = n_fail
-                    act_node['state']['gamma'] = gamma
-            
-            # save to netcdf file
-            t1 = default_timer()
-            if save_samp:
-                out_file = os.path.join(outdir, RESULT_GENERAL_SAMP_FILE_TEMP % (prob_name,k+init_iter+1))
-                if os.path.isfile(out_file):
-                    os.remove(out_file) # remove file if exists
-                    
-                with netcdf.netcdf_file(out_file,'w') as f:
-                    f.createDimension('var',dim)
-                    f.createDimension('samp',n_proc)
-                    nc_samp = f.createVariable('x','d',('samp','var'))
-                    nc_samp[:] = prop_pt_arr
-                    nc_samp = f.createVariable('y','d',('samp',))
-                    nc_samp[:] = Y_prop_pt
-                    nc_seed = f.createVariable('seed','i',('samp',))
-                    nc_seed[:] = seed_arr
-                    nc_wall_time = f.createVariable('tw_eval','d',())
-                    nc_wall_time.assignValue(t_eval_arr[k])
-            
-            t2 = default_timer()
-            t_save = t2-t1
-            
-            if verbose:
-                print('time to save samples = %.2e sec' % t_save)
-            
-            ############# Prepare for next iteration #############
-            
-            tp1 = default_timer()
-               
-            if not full_restart:
-                
-                if n_reduce_sigma > max_n_reduce_sigma:
-                    # then we either restart or zoom-in
-                    Y_fit = rbf_mod(X_all[act_node['ix']])
-                    min_ix = np.argmin(Y_fit)
-                    x_star = X_all[act_node['ix']][min_ix]
-                    # suppose we're going to zoom in
-                    child_node_ix = get_child_node(x_star,zoom_lv,tree)
-                    if child_node_ix is None:
-                        # then we create a new child (if zoom in)
-                        fit_lb, fit_ub = zip(*fit_bd)
-                        blen = np.array(fit_ub)-np.array(fit_lb) # bound length for each dimension
-                        assert(np.min(blen)>0)
-                        fit_lb = np.maximum(x_star-rho/2.0*blen,fit_lb)
-                        fit_ub = np.minimum(x_star+rho/2.0*blen,fit_ub)
-                        fit_bd = list(zip(fit_lb,fit_ub)) # the list function is used to ensure compatibility of python3
-                        child_node = {'ix': np.nonzero(get_box_samp(X_all,fit_bd)[0])[0], 
-                                      'domain': fit_bd,
-                                      'parent_ix': act_node_ix,
-                                      'beta': init_beta,
-                                      'state': init_node_state()}
-                    else:
-                        # then we activate an existing child node (if zoom in)
-                        child_node = tree[zoom_lv+1][child_node_ix]
-                        child_node['ix'] = np.nonzero(get_box_samp(X_all,child_node['domain'])[0])[0]
-                    n_samp = len(child_node['ix'])
-                    fit_lb, fit_ub = zip(*child_node['domain'])
-                    blen = np.array(fit_ub)-np.array(fit_lb) # bound length for each dimension
-                    assert(np.min(blen)>0)
-                    
-                    if np.all(blen*n_samp**(-1./dim)<func_blen*resol): # resolution condition
-                        # then we restart
-                        if verbose:
-                            print('Restart for the next iteration!')                        
-                        full_restart = True
-                        zoom_lv = 0
-                        act_node_ix = 0
-                        X_all = np.zeros((0,dim))
-                        Y_all = np.zeros(0)
-                        tree = {zoom_lv: [{'ix': np.arange(0,dtype=int), # indice of samples for the node (with respect to X_all and Y_all)
-                                          'domain': func_bd, # domain of the node
-                                          'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent
-                                          'beta': init_beta, # zoom-out probability
-                                          'state': init_node_state() # state of the node
-                                          }]}
-                    else:
-                        # then we zoom in
-                        act_node['state'] = init_node_state() # reset the state of the current node
-                        zoom_lv += 1
-                        
-                        if child_node_ix is None:
-                            # then we create a new child
-                            if zoom_lv not in tree.keys():
-                                act_node_ix = 0
-                                tree[zoom_lv] = [child_node]    
-                            else:
-                                act_node_ix = len(tree[zoom_lv])
-                                tree[zoom_lv].append(child_node)
-                                
-                            if verbose:
-                                print('Zoom in (create a new child node)!')
-                                
-                        else:
-                            # then activate existing child node
-                            act_node_ix = child_node_ix
-                            # reduce zoom-out probability
-                            child_node['beta'] = max(min_beta,child_node['beta']/2.)
-                            
-                            if verbose:
-                                print('Zoom in (activate an existing child node)!')
-                                
-                if n_proc > 1 or (n_proc == 1 and srs_wgt_pat[0] == wgt_pat_bd[0]):            
-                    if np.random.uniform() < tree[zoom_lv][act_node_ix]['beta'] and zoom_lv > 0 and not full_restart:
-                        # then we zoom out
-                        child_node = tree[zoom_lv][act_node_ix]
-                        act_node_ix = child_node['parent_ix']
-                        zoom_lv -= 1
-                        assert(act_node_ix is not None)
-                        # check that the node after zooming out will contain the current node
-                        assert(intsect_bd(tree[zoom_lv][act_node_ix]['domain'],child_node['domain']) == child_node['domain']) 
-                        
-                        if verbose:
-                            print('Zoom out!')
-            
-            else:
-                # i.e., restart
-                n_full_restart += 1          
-                if n_full_restart == init_iter:
-                    full_restart = False
-                    n_full_restart = 0
-            
-            tm2 = default_timer()
-            t_misc = tm2-tm1-t_eval_arr[k]-t_save
-            
-            if verbose:
-                print('time for miscellaneous tasks (saving variables, etc.) = %.2e sec' % t_misc)
-            
-            # find time to prepare for next iteration
-            tp2 = default_timer()
-            t_update_arr[k] = tp2-tp1
-            
-            # find the time to run optimization algortithm (excluding time to evaluate and save samples)
-            tt2 = default_timer()
-            t_alg = tt2-tt1-t_eval_arr[k]-t_save
-            
-            if verbose:
-                print('time to run optimization algorithm = %.2e sec' % t_alg)
-                    
-            ########### Save results ###############
-            
-            t1 = default_timer()
-            
-            # save random state to pickle file for possible resume
-            if os.path.isfile(result_pkl_file):
-                os.remove(result_pkl_file) # remove file if exists 
-            with open(result_pkl_file,'wb') as f:
-                pickle.dump(np.random.get_state(),f)
-                
-            # save to npz file
-            temp_result_npz_file = result_npz_file+TEMP_RESULT_NPZ_FILE_SUFFIX # first save to temporary file to avoid loss of data upon termination
-            np.savez(temp_result_npz_file,
-                     # experiment condition parameters
-                     init_iter=init_iter,opt_iter=k+1,n_proc=n_proc,n_core_node=n_core_node,seed=seed,outdir=outdir,save_samp=save_samp,verbose=verbose,
-                     n_cand_fact=n_cand_fact,use_eff_n_samp=use_eff_n_samp,init_beta=init_beta,
-                     normalize_data=normalize_data,init_gamma=init_gamma,delta_gamma=delta_gamma,
-                     max_n_reduce_sigma=max_n_reduce_sigma,rho=rho,init_sigma=init_sigma,
-                     init_p=init_p,alpha=alpha,wgt_pat_bd=wgt_pat_bd,
-                     lambda_range=lambda_range,
-                     n_fold=n_fold,resol=resol,min_beta=min_beta,rbf_kernel=rbf_kernel,
-                     func_bd=func_bd,max_C_fail=max_C_fail,resume_iter=resume_iter,n_iter=n_iter,
-                     # optimization results
-                     t_build_arr=t_build_arr[:k+1],t_prop_arr=t_prop_arr[:k+1],
-                     t_srs_arr=t_srs_arr[:k+1],
-                     t_eval_arr=t_eval_arr[:k+1],t_update_arr=t_update_arr[:k+1],
-                     gSRS_pct_arr=gSRS_pct_arr[:k+1],zoom_lv_arr=zoom_lv_arr[:k+1],
-                     # state variables
-                     full_restart=full_restart,zoom_lv=zoom_lv,act_node_ix=act_node_ix,
-                     X_all=X_all,Y_all=Y_all,tree=tree,n_full_restart=n_full_restart,
-                     seed_base=seed_base,seed_flat_arr=seed_flat_arr,
-                     X_samp_restart=X_samp_restart)
-            
-            shutil.copy2(temp_result_npz_file,result_npz_file) # overwrite the original one
-            os.remove(temp_result_npz_file) # remove temporary file
-            
-            t2 = default_timer()
-            
-            if verbose:
-                print('time to save results = %.2e sec' % (t2-t1))  
-            
-            # save terminal output to file
+            # flush standard outputs and standard errors to files
             if std_out_file is not None:
                 sys.stdout.terminal.flush()
                 sys.stdout.log.flush()
@@ -645,7 +224,422 @@ class Optimizer:
                 sys.stderr.terminal.flush()
                 sys.stderr.log.flush()
         
-        # find best point and its (noisy) function value
+        
+#        ########################### Main program ############################
+#        
+#        if resume_iter is None:
+#            
+#            pass
+            
+#            ########### Initial sampling (DOE) ################ 
+#            
+#            np.random.seed(int(seed))
+#            
+#            t1 = default_timer()
+#            
+#            n_init_samp = n_proc*init_iter
+#            X_all = doe(n_init_samp,func_bd)
+#                
+#            t2 = default_timer()
+#            
+#            t_doe = t2-t1
+#            
+#            ########### Evaluate DOE ################
+#            
+#            t_eval = np.zeros(init_iter)
+#            
+#            seed_base = seed+1
+#            seed_flat_arr = np.array([])
+#            
+#            # initialization
+#            Y_all = np.zeros(n_init_samp)
+#            for k in range(init_iter):
+#                ix1,ix2 = k*n_proc,(k+1)*n_proc
+#                X = X_all[ix1:ix2]
+#                seed_arr = seed_base+np.arange(n_proc)
+#                seed_flat_arr = np.append(seed_flat_arr,seed_arr) # update seed_flat_arr for sanity check
+#                seed_base += n_proc
+#                out_list = [os.path.join(outdir, RESULT_SAMP_FILE_TEMP % (prob_name,k+1,n+1)) \
+#                            for n in range(n_proc)]
+#                t1 = default_timer()
+#                # evaluate function
+#                Y = func_eval(obj_func,X,seed_arr,out_list,pool_eval,comm)
+#                t2 = default_timer()
+#                t_eval[k] = t2-t1
+#                # save Y
+#                Y_all[ix1:ix2] = Y
+#                
+#                # save to netcdf file
+#                if save_samp:
+#                    out_file = os.path.join(outdir, RESULT_GENERAL_SAMP_FILE_TEMP % (prob_name,k+1))
+#                    if os.path.isfile(out_file):
+#                        os.remove(out_file) # remove file if exists
+#                    with netcdf.netcdf_file(out_file,'w') as f:
+#                        f.createDimension('var',dim)
+#                        f.createDimension('samp',n_proc)
+#                        nc_samp = f.createVariable('x','d',('samp','var'))
+#                        nc_samp[:] = X
+#                        nc_samp = f.createVariable('y','d',('samp',))
+#                        nc_samp[:] = Y
+#                        nc_seed = f.createVariable('seed','i',('samp',))
+#                        nc_seed[:] = seed_arr
+#                        nc_wall_time = f.createVariable('tw_eval','d',())
+#                        nc_wall_time.assignValue(t_eval[k])
+#                        nc_wall_time = f.createVariable('tw_doe','d',())
+#                        nc_wall_time.assignValue(t_doe)
+#            
+#            # sanity check
+#            assert(np.all(seed_flat_arr == np.arange(np.min(seed_flat_arr),np.max(seed_flat_arr)+1)))
+#        
+#        
+#            ######### Initializations for optimization ########
+#                
+#            # count number of full restart
+#            n_full_restart = 0
+#            # full restart flag
+#            full_restart = False
+#            # doe samples for restart (useful for resume)
+#            X_samp_restart = np.zeros((0,dim))
+        
+#        else:
+#            
+#            t1 = default_timer()
+#            
+#            resume_opt_iter = resume_iter-init_iter
+#            resume_opt_iter = int(resume_opt_iter) # convert to integer type if not
+#            # remove lock file if exists
+#            result_npz_lock_file = result_npz_file+'.lock'
+#            if os.path.isfile(result_npz_lock_file):
+#                os.remove(result_npz_lock_file)
+#            # read experiment conditions from previous trials
+#            data = np.load(result_npz_file)
+#            assert(resume_opt_iter==data['opt_iter']), \
+#            'Please resume from where it ended last time by setting resume_iter = %d' % (data['opt_iter']+init_iter)
+#    
+#            # sanity check for consistency of experiment conditions
+#            assert(init_iter==data['init_iter'] and n_proc==data['n_proc'] and seed==data['seed']
+#                   and np.all(func_bd==data['func_bd']) and n_core_node==data['n_core_node']
+#                   and n_cand_fact==data['n_cand_fact'] and alpha==data['alpha'] 
+#                   and normalize_data==data['normalize_data'] and init_gamma==data['init_gamma']
+#                   and delta_gamma==data['delta_gamma'] and max_n_reduce_sigma==data['max_n_reduce_sigma']
+#                   and rho==data['rho'] and np.all(init_sigma==data['init_sigma'])
+#                   and init_p==data['init_p'] and np.all(wgt_pat_bd==data['wgt_pat_bd'])
+#                   and np.all(lambda_range==data['lambda_range'])
+#                   and n_fold==data['n_fold'] and resol==data['resol'] and min_beta==data['min_beta']
+#                   and init_beta==data['init_beta'] and max_C_fail==data['max_C_fail']
+#                   and use_eff_n_samp==data['use_eff_n_samp'] and rbf_kernel==data['rbf_kernel'])
+#            
+#            # read status variables from previous experiment
+#            full_restart = data['full_restart'].item(0)
+#            X_samp_restart = data['X_samp_restart']
+#            zoom_lv = data['zoom_lv'].item(0)
+#            act_node_ix = data['act_node_ix'].item(0)
+#            X_all = data['X_all']
+#            Y_all = data['Y_all']
+#            tree = data['tree'].item(0)
+#            n_full_restart = data['n_full_restart'].item(0)
+#            seed_base = data['seed_base'].item(0)
+#            seed_flat_arr = data['seed_flat_arr']
+#            
+#            # read optimization results from previous experiment
+#            t_build_arr[:resume_opt_iter] = data['t_build_arr']
+#            t_prop_arr[:resume_opt_iter] = data['t_prop_arr']
+#            t_srs_arr[:resume_opt_iter] = data['t_srs_arr']
+#            t_eval_arr[:resume_opt_iter] = data['t_eval_arr']
+#            t_update_arr[:resume_opt_iter] = data['t_update_arr']
+#            gSRS_pct_arr[:resume_opt_iter] = data['gSRS_pct_arr']
+#            zoom_lv_arr[:resume_opt_iter] = data['zoom_lv_arr']
+#            
+#            # load random state
+#            result_pkl_lock_file = result_pkl_file+'.lock'
+#            if os.path.isfile(result_pkl_lock_file):
+#                os.remove(result_pkl_lock_file)
+#            with open(result_pkl_file, 'rb') as f:
+#                np.random.set_state(pickle.load(f))
+#                
+#            t2 = default_timer()
+#            t_resume = t2-t1
+#            if verbose:
+#                print('\ntime to prepare resume = %.2e sec' % t_resume)
+        
+#        ########### Optimization iterations ################
+#        
+#        start_iter = 0 if resume_iter is None else resume_opt_iter
+#        
+#        for k in range(start_iter,opt_iter):
+#            
+#            if verbose:
+#                print('\nStart optimization iteration = %d/%d' % (k+1,opt_iter))
+#            
+#            tt1 = default_timer()
+#            
+#            
+#                    
+#            if not full_restart:
+#                    
+#                pass
+#        
+#            else:
+                
+#                # i.e. do full restart
+#                if n_full_restart == 0:
+#                    n_init_samp = n_proc*init_iter
+#                    X_samp_restart = doe(n_init_samp,func_bd)
+#                
+#                ix1, ix2 = n_full_restart*n_proc, (n_full_restart+1)*n_proc
+#                prop_pt_arr = X_samp_restart[ix1:ix2]
+#                
+#                gSRS_pct = np.nan
+#                pass
+            
+#            tm1 = default_timer()        
+#            # save variables
+#            gSRS_pct_arr[k] = gSRS_pct # save gSRS_pct
+#            zoom_lv_arr[k] = zoom_lv # save zoom_lv
+#            
+#            ############ Evaluate proposed points #############
+#            
+#            seed_arr = seed_base+np.arange(n_proc)
+#            seed_flat_arr = np.append(seed_flat_arr,seed_arr) # update seed_flat_arr for sanity check
+#            seed_base += n_proc
+#            out_list = [os.path.join(outdir, RESULT_SAMP_FILE_TEMP % (prob_name,k+init_iter+1,n+1)) \
+#                        for n in range(n_proc)]
+#            t1 = default_timer()
+#            Y_prop_pt = func_eval(obj_func,prop_pt_arr,seed_arr,out_list,pool_eval,comm)
+#            t2 = default_timer()
+#            Y_prop_pt = np.array(Y_prop_pt)
+#            assert(len(prop_pt_arr) == len(Y_prop_pt) == n_proc)
+#            
+#            assert(np.all(seed_flat_arr == np.arange(np.min(seed_flat_arr),np.max(seed_flat_arr)+1)))
+#            
+#            t_eval_arr[k] = t2-t1
+#            
+#            if verbose:
+#                print('time to evaluate points = %.2e sec' % t_eval_arr[k])
+            
+#            # update node
+#            n_X_all = len(X_all)
+#            act_node['ix'] = np.append(act_node['ix'], np.arange(n_X_all,n_X_all+n_proc,dtype=int))
+#            # update samples
+#            X_all = np.vstack((X_all,prop_pt_arr))
+#            Y_all = np.append(Y_all,Y_prop_pt)
+#                
+#            # update state of the current node
+#            if not full_restart:
+#                    
+#                if n_proc > 1 or (n_proc == 1 and srs_wgt_pat[0] == wgt_pat_bd[0]):
+#                    if p_val >= 0.1:
+#                        # compute p_val
+#                        if use_eff_n_samp:
+#                            eff_n = eff_npt(X_all[act_node['ix']],act_node['domain'])
+#                        else:
+#                            eff_n = len(X_all[act_node['ix']])
+#                        p_val = p_val*eff_n**(-alpha/float(dim))
+#                        
+#                    if gSRS_pct == 0: # i.e. pure local SRS
+#                        best_Y_prev = np.min(y_node)
+#                        best_Y_new = np.min(Y_prop_pt) # minimum of Y values of newly proposed points
+#                        if best_Y_prev <= best_Y_new: # failure                
+#                            n_fail += 1 # count failure
+#                        else:
+#                            n_fail = 0
+#                        if n_fail == max_C_fail:
+#                            n_fail = 0
+#                            gamma += delta_gamma
+#                            n_reduce_sigma += 1 # update counter
+#                    act_node['state']['p'] = p_val
+#                    act_node['state']['Cr'] = n_reduce_sigma
+#                    act_node['state']['Cf'] = n_fail
+#                    act_node['state']['gamma'] = gamma
+            
+#            # save to netcdf file
+#            t1 = default_timer()
+#            if save_samp:
+#                out_file = os.path.join(outdir, RESULT_GENERAL_SAMP_FILE_TEMP % (prob_name,k+init_iter+1))
+#                if os.path.isfile(out_file):
+#                    os.remove(out_file) # remove file if exists
+#                    
+#                with netcdf.netcdf_file(out_file,'w') as f:
+#                    f.createDimension('var',dim)
+#                    f.createDimension('samp',n_proc)
+#                    nc_samp = f.createVariable('x','d',('samp','var'))
+#                    nc_samp[:] = prop_pt_arr
+#                    nc_samp = f.createVariable('y','d',('samp',))
+#                    nc_samp[:] = Y_prop_pt
+#                    nc_seed = f.createVariable('seed','i',('samp',))
+#                    nc_seed[:] = seed_arr
+#                    nc_wall_time = f.createVariable('tw_eval','d',())
+#                    nc_wall_time.assignValue(t_eval_arr[k])
+#            
+#            t2 = default_timer()
+#            t_save = t2-t1
+#            
+#            if verbose:
+#                print('time to save samples = %.2e sec' % t_save)
+            
+#            ############# Prepare for next iteration #############
+#            
+#            tp1 = default_timer()
+#               
+#            if not full_restart:
+#                
+#                pass
+                
+#                if n_reduce_sigma > max_n_reduce_sigma:
+#                    # then we either restart or zoom-in
+#                    Y_fit = rbf_mod(X_all[act_node['ix']])
+#                    min_ix = np.argmin(Y_fit)
+#                    x_star = X_all[act_node['ix']][min_ix]
+#                    # suppose we're going to zoom in
+#                    child_node_ix = get_child_node(x_star,zoom_lv,tree)
+#                    if child_node_ix is None:
+#                        # then we create a new child (if zoom in)
+#                        fit_lb, fit_ub = zip(*fit_bd)
+#                        blen = np.array(fit_ub)-np.array(fit_lb) # bound length for each dimension
+#                        assert(np.min(blen)>0)
+#                        fit_lb = np.maximum(x_star-rho/2.0*blen,fit_lb)
+#                        fit_ub = np.minimum(x_star+rho/2.0*blen,fit_ub)
+#                        fit_bd = list(zip(fit_lb,fit_ub)) # the list function is used to ensure compatibility of python3
+#                        child_node = {'ix': np.nonzero(get_box_samp(X_all,fit_bd)[0])[0], 
+#                                      'domain': fit_bd,
+#                                      'parent_ix': act_node_ix,
+#                                      'beta': init_beta,
+#                                      'state': init_node_state()}
+#                    else:
+#                        # then we activate an existing child node (if zoom in)
+#                        child_node = tree[zoom_lv+1][child_node_ix]
+#                        child_node['ix'] = np.nonzero(get_box_samp(X_all,child_node['domain'])[0])[0]
+#                    n_samp = len(child_node['ix'])
+#                    fit_lb, fit_ub = zip(*child_node['domain'])
+#                    blen = np.array(fit_ub)-np.array(fit_lb) # bound length for each dimension
+#                    assert(np.min(blen)>0)
+#                    
+#                    if np.all(blen*n_samp**(-1./dim)<func_blen*resol): # resolution condition
+#                        # then we restart
+#                        if verbose:
+#                            print('Restart for the next iteration!')                        
+#                        full_restart = True
+#                        zoom_lv = 0
+#                        act_node_ix = 0
+#                        X_all = np.zeros((0,dim))
+#                        Y_all = np.zeros(0)
+#                        tree = {zoom_lv: [{'ix': np.arange(0,dtype=int), # indice of samples for the node (with respect to X_all and Y_all)
+#                                          'domain': func_bd, # domain of the node
+#                                          'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent
+#                                          'beta': init_beta, # zoom-out probability
+#                                          'state': init_node_state() # state of the node
+#                                          }]}
+#                    else:
+#                        # then we zoom in
+#                        act_node['state'] = init_node_state() # reset the state of the current node
+#                        zoom_lv += 1
+#                        
+#                        if child_node_ix is None:
+#                            # then we create a new child
+#                            if zoom_lv not in tree.keys():
+#                                act_node_ix = 0
+#                                tree[zoom_lv] = [child_node]    
+#                            else:
+#                                act_node_ix = len(tree[zoom_lv])
+#                                tree[zoom_lv].append(child_node)
+#                                
+#                            if verbose:
+#                                print('Zoom in (create a new child node)!')
+#                                
+#                        else:
+#                            # then activate existing child node
+#                            act_node_ix = child_node_ix
+#                            # reduce zoom-out probability
+#                            child_node['beta'] = max(min_beta,child_node['beta']/2.)
+#                            
+#                            if verbose:
+#                                print('Zoom in (activate an existing child node)!')
+#                                
+#                if n_proc > 1 or (n_proc == 1 and srs_wgt_pat[0] == wgt_pat_bd[0]):            
+#                    if np.random.uniform() < tree[zoom_lv][act_node_ix]['beta'] and zoom_lv > 0 and not full_restart:
+#                        # then we zoom out
+#                        child_node = tree[zoom_lv][act_node_ix]
+#                        act_node_ix = child_node['parent_ix']
+#                        zoom_lv -= 1
+#                        assert(act_node_ix is not None)
+#                        # check that the node after zooming out will contain the current node
+#                        assert(intsect_bd(tree[zoom_lv][act_node_ix]['domain'],child_node['domain']) == child_node['domain']) 
+#                        
+#                        if verbose:
+#                            print('Zoom out!')
+#            
+#            else:
+#                # i.e., restart
+#                n_full_restart += 1          
+#                if n_full_restart == init_iter:
+#                    full_restart = False
+#                    n_full_restart = 0
+#            
+#            tm2 = default_timer()
+#            t_misc = tm2-tm1-t_eval_arr[k]-t_save
+#            
+#            if verbose:
+#                print('time for miscellaneous tasks (saving variables, etc.) = %.2e sec' % t_misc)
+#            
+#            # find time to prepare for next iteration
+#            tp2 = default_timer()
+#            t_update_arr[k] = tp2-tp1
+#            
+#            # find the time to run optimization algortithm (excluding time to evaluate and save samples)
+#            tt2 = default_timer()
+#            t_alg = tt2-tt1-t_eval_arr[k]-t_save
+#            
+#            if verbose:
+#                print('time to run optimization algorithm = %.2e sec' % t_alg)
+                    
+#            ########### Save results ###############
+#            
+#            t1 = default_timer()
+#            
+#            # save random state to pickle file for possible resume
+#            if os.path.isfile(result_pkl_file):
+#                os.remove(result_pkl_file) # remove file if exists 
+#            with open(result_pkl_file,'wb') as f:
+#                pickle.dump(np.random.get_state(),f)
+#                
+#            # save to npz file
+#            temp_result_npz_file = result_npz_file+TEMP_RESULT_NPZ_FILE_SUFFIX # first save to temporary file to avoid loss of data upon termination
+#            np.savez(temp_result_npz_file,
+#                     # experiment condition parameters
+#                     init_iter=init_iter,opt_iter=k+1,n_proc=n_proc,n_core_node=n_core_node,seed=seed,outdir=outdir,save_samp=save_samp,verbose=verbose,
+#                     n_cand_fact=n_cand_fact,use_eff_n_samp=use_eff_n_samp,init_beta=init_beta,
+#                     normalize_data=normalize_data,init_gamma=init_gamma,delta_gamma=delta_gamma,
+#                     max_n_reduce_sigma=max_n_reduce_sigma,rho=rho,init_sigma=init_sigma,
+#                     init_p=init_p,alpha=alpha,wgt_pat_bd=wgt_pat_bd,
+#                     lambda_range=lambda_range,
+#                     n_fold=n_fold,resol=resol,min_beta=min_beta,rbf_kernel=rbf_kernel,
+#                     func_bd=func_bd,max_C_fail=max_C_fail,resume_iter=resume_iter,n_iter=n_iter,
+#                     # optimization results
+#                     t_build_arr=t_build_arr[:k+1],t_prop_arr=t_prop_arr[:k+1],
+#                     t_srs_arr=t_srs_arr[:k+1],
+#                     t_eval_arr=t_eval_arr[:k+1],t_update_arr=t_update_arr[:k+1],
+#                     gSRS_pct_arr=gSRS_pct_arr[:k+1],zoom_lv_arr=zoom_lv_arr[:k+1],
+#                     # state variables
+#                     full_restart=full_restart,zoom_lv=zoom_lv,act_node_ix=act_node_ix,
+#                     X_all=X_all,Y_all=Y_all,tree=tree,n_full_restart=n_full_restart,
+#                     seed_base=seed_base,seed_flat_arr=seed_flat_arr,
+#                     X_samp_restart=X_samp_restart)
+#            
+#            shutil.copy2(temp_result_npz_file,result_npz_file) # overwrite the original one
+#            os.remove(temp_result_npz_file) # remove temporary file
+#            
+#            t2 = default_timer()
+#            
+#            if verbose:
+#                print('time to save results = %.2e sec' % (t2-t1))  
+#           
+#            # save terminal output to file
+#            if std_out_file is not None:
+#                sys.stdout.terminal.flush()
+#                sys.stdout.log.flush()
+#            if std_err_file is not None:
+#                sys.stderr.terminal.flush()
+#                sys.stderr.log.flush()
         
         
     def doe(self, criterion='maximin'):
@@ -669,6 +663,23 @@ class Optimizer:
         return samp
     
     
+    def init_tree(self):
+        """
+        Initialize an optimization tree.
+        
+        Returns:
+            
+            tree (dict): Initial tree.
+        """
+        tree = {self.zoom_lv: [{'ix': np.arange(self._n_doe_samp, dtype=int), # indice of data for the tree node (w.r.t. `self.x_all` or `self.y_all`).
+                                'domain': self._prob.domain, # domain of the tree node.
+                                'parent_ix': None, # parent node index for the upper zoom level (zero-based). If None, there's no parent.
+                                'beta': self._init_beta, # zoom-out probability.
+                                'state': self.init_node_state() # state of the tree node.
+                                }]}
+        return tree
+    
+        
     def init_node_state(self):
         """
         Initialize the state of a node of the optimization tree.
@@ -707,6 +718,11 @@ class Optimizer:
         if self.i_iter_doe < self._n_iter_doe:
             # i.e., current iteration is in DOE phase
             new_pt = self.doe_samp[self.i_iter_doe*self._n_worker:(self.i_iter_doe+1)*self._n_worker]
+            # the following variables will be saved in the `self.update` method
+            # so we need to set them appropriately
+            self.gSRS_pct = np.nan
+            self.t_build = 0.
+            self.t_srs = 0.
         else:
             # i.e., current iteration is in true optimization phase
             
@@ -861,34 +877,139 @@ class Optimizer:
             
             verbose (bool, optional): Whether to verbose about updating the state of the optimizer.
         """
-        # FIXME: add verbose
+        # FIXME: check verbose
         np.random.set_state(self.random_state)
         
-        if self.i_iter_doe < self._n_iter_doe: # i.e., current iteration is in DOE phase
-            self.i_iter_doe += 1  
-        else:
-            if self._n_worker == 1:
-                # alternating weight pattern in SRS method
-                self.srs_wgt_pat = np.array([self._wgt_pat_bd[0]]) if self.srs_wgt_pat[0] == self._wgt_pat_bd[1] else np.array([self._wgt_pat_bd[1]])
+        t1 = default_timer()
+        
         self.i_iter += 1
-        
-        # TODO: to be continued
-        
-        if restart: # FIXME: fix `restart` variable: we need to do at least the following:
-            # reset variables
-            self.i_iter_doe = 0
-            self.doe_samp = self.doe()
-            self.i_restart += 1
-            
-            
-            # TODO: to be continued
-        
-        # save variables
-        assert(0 <= self.gSRS_pct <= 1)
+        self.x_all = np.vstack((self.x_all, new_x))
+        self.y_all = np.append(self.y_all, new_y)
+        self.seed_all = np.append(self.seed_all, self.eval_seeds)
+        min_ix = np.argmin(self.y_all)
+        self.best_x = self.x_all[min_ix]
+        self.best_y = self.y_all[min_ix]
+        self.t_build_arr = np.append(self.t_build_arr, self.t_build) 
+        self.t_srs_arr = np.append(self.t_srs_arr, self.t_srs)
+        self.t_prop_arr = np.append(self.t_prop_arr, self.t_prop)
+        self.t_eval_arr = np.append(self.t_eval_arr, self.t_eval)
         self.gSRS_pct_arr = np.append(self.gSRS_pct_arr, self.gSRS_pct)
-        self.t_build_arr = np.append(self.t_build_arr, self.t_build)
-        # TODO: to be continued
+        self.zoom_lv_arr = np.append(self.zoom_lv_arr, self.zoom_lv)
+           
+        if self.i_iter_doe < self._n_iter_doe: # i.e., current iteration is in DOE phase
+            self.i_iter_doe += 1
+        else:
+            # update weight pattern in SRS method
+            if self._n_worker == 1:
+                self.srs_wgt_pat = np.array([self._wgt_pat_bd[0]]) if self.srs_wgt_pat[0] == self._wgt_pat_bd[1] \
+                    else np.array([self._wgt_pat_bd[1]]) # alternating weights
+            # update tree node
+            npt = len(self.x_all)
+            self.act_node['ix'] = np.append(self.act_node['ix'], np.arange(npt, npt+self._n_worker, dtype=int))
+            if self._n_worker > 1 or (self._n_worker == 1 and self.srs_wgt_pat[0] == self._wgt_pat_bd[0]):
+                if self.p_val >= 0.1:
+                    # compute p_val
+                    if self._use_eff_n_samp:
+                        eff_n = eff_npt(self.x_all[self.act_node['ix']], self.act_node['domain'])
+                    else:
+                        eff_n = len(self.x_all[self.act_node['ix']])
+                    self.p_val = self.p_val*eff_n**(-self._alpha/float(self._dim))
+                    
+                if self.gSRS_pct == 0: # i.e. pure local SRS
+                    best_Y_prev = np.min(self.y_node)
+                    best_Y_new = np.min(new_y) # minimum of Y values of newly proposed points
+                    if best_Y_prev <= best_Y_new: # failure                
+                        self.n_fail += 1 # count failure
+                    else:
+                        self.n_fail = 0
+                    if self.n_fail == self._max_C_fail:
+                        self.n_fail = 0
+                        self.gamma -= self._delta_gamma
+                        self.n_reduce_sigma += 1 # update counter
+                self.act_node['state']['p'] = self.p_val
+                self.act_node['state']['Cr'] = self.n_reduce_sigma
+                self.act_node['state']['Cf'] = self.n_fail
+                self.act_node['state']['gamma'] = self.gamma
+            
+            if self.n_reduce_sigma > self._max_n_reduce_sigma:
+                # then we either restart or zoom-in (i.e., critical state is reached)
+                Y_fit = self.rbf_mod(self.x_all[self.act_node['ix']])
+                min_ix = np.argmin(Y_fit)
+                x_star = self.x_all[self.act_node['ix']][min_ix]
+                # suppose we're going to zoom in
+                child_node_ix = self.get_child_node(x_star)
+                if child_node_ix is None:
+                    # then we create a new child (if zoom in)
+                    domain_lb, domain_ub = zip(*self.act_node['domain'])
+                    blen = np.array(domain_ub)-np.array(domain_lb) # bound length for each dimension
+                    assert(np.min(blen)>0)
+                    domain_lb = np.maximum(x_star-self._rho/2.*blen, domain_lb)
+                    domain_ub = np.minimum(x_star+self._rho/2.*blen, domain_ub)
+                    domain = list(zip(domain_lb, domain_ub)) # the list function is used to ensure compatibility of python3
+                    child_node = {'ix': np.nonzero(boxify(self.x_all, domain)[0])[0], 
+                                  'domain': domain,
+                                  'parent_ix': self.act_node_ix,
+                                  'beta': self._init_beta,
+                                  'state': self.init_node_state()}
+                else:
+                    # then we activate an existing child node (if zoom in)
+                    child_node = self.tree[self.zoom_lv+1][child_node_ix]
+                    child_node['ix'] = np.nonzero(boxify(self.x_all, child_node['domain'])[0])[0]
+                child_npt = len(child_node['ix'])
+                domain_lb, domain_ub = zip(*child_node['domain'])
+                blen = np.array(domain_ub)-np.array(domain_lb) # bound length for each dimension
+                assert(np.min(blen)>0)
+                
+                if np.all(blen*child_npt**(-1./self._dim) < (self._prob.domain_ub-self._prob.domain_lb)*self._resol): # resolution condition
+                    # then we restart
+                    if verbose:
+                        print('Restart for the next iteration!')
+                    self.i_iter_doe = 0
+                    self.doe_samp = self.doe()
+                    self.i_restart += 1
+                    self.zoom_lv = 0
+                    self.act_node_ix = 0
+                    self.x_all = np.zeros((0, self._dim))
+                    self.y_all = np.zeros(0)
+                    self.tree = self.init_tree()
+                else:
+                    # then we zoom in
+                    self.act_node['state'] = self.init_node_state() # reset the state of the current node
+                    self.zoom_lv += 1
+                    if child_node_ix is None:
+                        # then we create a new child
+                        if self.zoom_lv not in self.tree.keys():
+                            self.act_node_ix = 0
+                            self.tree[self.zoom_lv] = [child_node]    
+                        else:
+                            self.act_node_ix = len(self.tree[self.zoom_lv])
+                            self.tree[self.zoom_lv].append(child_node)    
+                        if verbose:
+                            print('Zoom in (create a new child node)!')       
+                    else:
+                        # then activate existing child node
+                        self.act_node_ix = child_node_ix
+                        # reduce zoom-out probability
+                        child_node['beta'] = max(self._min_beta, child_node['beta']/2.)
+                        if verbose:
+                            print('Zoom in (activate an existing child node)!')
+            
+            if self._n_worker > 1 or (self._n_worker == 1 and self.srs_wgt_pat[0] == self._wgt_pat_bd[0]):
+                if np.random.uniform() < self.tree[self.zoom_lv][self.act_node_ix]['beta'] and self.zoom_lv > 0 and self.i_iter_doe >= self._n_iter_doe:
+                    # then we zoom out
+                    child_node = self.tree[self.zoom_lv][self.act_node_ix]
+                    self.act_node_ix = child_node['parent_ix']
+                    self.zoom_lv -= 1
+                    assert(self.act_node_ix is not None)
+                    # check that the node after zooming out will contain the current node
+                    assert(domain_intersect(self.tree[self.zoom_lv][self.act_node_ix]['domain'], child_node['domain']) == child_node['domain'])
+                    if verbose:
+                        print('Zoom out!')
         
+        t2 = default_timer()
+        self.t_update_arr = np.append(self.t_update_arr, t2-t1)
+        
+        self.save_state()
         self.random_state = np.random.get_state()
         
     
@@ -909,9 +1030,14 @@ class Optimizer:
         # FIXME: add verbose
         np.random.set_state(self.random_state)
         
+        t1 = default_timer()
+        
         self.eval_seeds = self._seed+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
         y = eval_func(self._prob.f, x, n_proc=self._n_worker, seeds=self.eval_seeds.tolist(),
                       seed_func=self._seed_func)
+        
+        t2 = default_timer()
+        self.t_eval = t2-t1
         
         self.random_state = np.random.get_state()
         
@@ -936,15 +1062,141 @@ class Optimizer:
         return done
     
     
+    def get_child_node(self, x_star):
+        """
+        Get the child node for the optimization tree.
+        
+        Args:
+            
+            x_star (1d array): Focal point of zoom-in.
+            
+        Returns:
+            
+            child_ix (int or None): Selected child node index. 
+                If None, then we need to create a new child.
+        """
+        assert(x_star.ndim == 1)
+        # get zoom level of a child node
+        n_zoom_child = self.zoom_lv+1
+        if n_zoom_child not in self.tree.keys():
+            child_ix = None
+        else:
+            # the indice of candidate child nodes
+            child_node_ix_list = [i for i, c in enumerate(self.tree[n_zoom_child]) if all(boxify(x_star.reshape((1, -1)), c['domain'])[0])]
+            if len(child_node_ix_list) == 0:
+                child_ix = None
+            else:
+                # find the child node among the candidates, of which the center of the domain is closest to x_star
+                dist_list = [np.linalg.norm(np.mean(self.tree[n_zoom_child][i]['domain'])-x_star) for i in child_node_ix_list]
+                child_ix = child_node_ix_list[np.argmin(dist_list)]
+        
+        return child_ix
+    
+    
     def save_state(self):
         """
         Save the state of the optimizer to files.
         """
+        # FIXME: rewrite the following
+        
+        # save random state to pickle file for possible resume
+        if os.path.isfile(result_pkl_file):
+            os.remove(result_pkl_file) # remove file if exists 
+        with open(result_pkl_file,'wb') as f:
+            pickle.dump(np.random.get_state(),f)
+            
+        # save to npz file
+        temp_result_npz_file = result_npz_file+TEMP_RESULT_NPZ_FILE_SUFFIX # first save to temporary file to avoid loss of data upon termination
+        np.savez(temp_result_npz_file,
+                 # experiment condition parameters
+                 init_iter=init_iter,opt_iter=k+1,n_proc=n_proc,n_core_node=n_core_node,seed=seed,outdir=outdir,save_samp=save_samp,verbose=verbose,
+                 n_cand_fact=n_cand_fact,use_eff_n_samp=use_eff_n_samp,init_beta=init_beta,
+                 normalize_data=normalize_data,init_gamma=init_gamma,delta_gamma=delta_gamma,
+                 max_n_reduce_sigma=max_n_reduce_sigma,rho=rho,init_sigma=init_sigma,
+                 init_p=init_p,alpha=alpha,wgt_pat_bd=wgt_pat_bd,
+                 lambda_range=lambda_range,
+                 n_fold=n_fold,resol=resol,min_beta=min_beta,rbf_kernel=rbf_kernel,
+                 func_bd=func_bd,max_C_fail=max_C_fail,resume_iter=resume_iter,n_iter=n_iter,
+                 # optimization results
+                 t_build_arr=t_build_arr[:k+1],t_prop_arr=t_prop_arr[:k+1],
+                 t_srs_arr=t_srs_arr[:k+1],
+                 t_eval_arr=t_eval_arr[:k+1],t_update_arr=t_update_arr[:k+1],
+                 gSRS_pct_arr=gSRS_pct_arr[:k+1],zoom_lv_arr=zoom_lv_arr[:k+1],
+                 # state variables
+                 full_restart=full_restart,zoom_lv=zoom_lv,act_node_ix=act_node_ix,
+                 X_all=X_all,Y_all=Y_all,tree=tree,n_full_restart=n_full_restart,
+                 seed_base=seed_base,seed_flat_arr=seed_flat_arr,
+                 X_samp_restart=X_samp_restart)
+        
+        shutil.copy2(temp_result_npz_file,result_npz_file) # overwrite the original one
+        os.remove(temp_result_npz_file) # remove temporary file
+   
     
     def load_state(self):
         """
         Load the state of the optimizer from files.
         """
+        # FIXME: rewrite the following
+        
+        t1 = default_timer()
+            
+        resume_opt_iter = resume_iter-init_iter
+        resume_opt_iter = int(resume_opt_iter) # convert to integer type if not
+        # remove lock file if exists
+        result_npz_lock_file = result_npz_file+'.lock'
+        if os.path.isfile(result_npz_lock_file):
+            os.remove(result_npz_lock_file)
+        # read experiment conditions from previous trials
+        data = np.load(result_npz_file)
+        assert(resume_opt_iter==data['opt_iter']), \
+        'Please resume from where it ended last time by setting resume_iter = %d' % (data['opt_iter']+init_iter)
+
+        # sanity check for consistency of experiment conditions
+        assert(init_iter==data['init_iter'] and n_proc==data['n_proc'] and seed==data['seed']
+               and np.all(func_bd==data['func_bd']) and n_core_node==data['n_core_node']
+               and n_cand_fact==data['n_cand_fact'] and alpha==data['alpha'] 
+               and normalize_data==data['normalize_data'] and init_gamma==data['init_gamma']
+               and delta_gamma==data['delta_gamma'] and max_n_reduce_sigma==data['max_n_reduce_sigma']
+               and rho==data['rho'] and np.all(init_sigma==data['init_sigma'])
+               and init_p==data['init_p'] and np.all(wgt_pat_bd==data['wgt_pat_bd'])
+               and np.all(lambda_range==data['lambda_range'])
+               and n_fold==data['n_fold'] and resol==data['resol'] and min_beta==data['min_beta']
+               and init_beta==data['init_beta'] and max_C_fail==data['max_C_fail']
+               and use_eff_n_samp==data['use_eff_n_samp'] and rbf_kernel==data['rbf_kernel'])
+        
+        # read status variables from previous experiment
+        full_restart = data['full_restart'].item(0)
+        X_samp_restart = data['X_samp_restart']
+        zoom_lv = data['zoom_lv'].item(0)
+        act_node_ix = data['act_node_ix'].item(0)
+        X_all = data['X_all']
+        Y_all = data['Y_all']
+        tree = data['tree'].item(0)
+        n_full_restart = data['n_full_restart'].item(0)
+        seed_base = data['seed_base'].item(0)
+        seed_flat_arr = data['seed_flat_arr']
+        
+        # read optimization results from previous experiment
+        t_build_arr[:resume_opt_iter] = data['t_build_arr']
+        t_prop_arr[:resume_opt_iter] = data['t_prop_arr']
+        t_srs_arr[:resume_opt_iter] = data['t_srs_arr']
+        t_eval_arr[:resume_opt_iter] = data['t_eval_arr']
+        t_update_arr[:resume_opt_iter] = data['t_update_arr']
+        gSRS_pct_arr[:resume_opt_iter] = data['gSRS_pct_arr']
+        zoom_lv_arr[:resume_opt_iter] = data['zoom_lv_arr']
+        
+        # load random state
+        result_pkl_lock_file = result_pkl_file+'.lock'
+        if os.path.isfile(result_pkl_lock_file):
+            os.remove(result_pkl_lock_file)
+        with open(result_pkl_file, 'rb') as f:
+            np.random.set_state(pickle.load(f))
+            
+        t2 = default_timer()
+        t_resume = t2-t1
+        if verbose:
+            print('\ntime to prepare resume = %.2e sec' % t_resume)
+            
         
     def visualize(self, fig_paths={'optim_curve': None, 'zoom_level': None, 'time': None}):
         """

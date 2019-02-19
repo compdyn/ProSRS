@@ -9,6 +9,7 @@ Define utility functions.
 import numpy as np
 from pathos.multiprocessing import ProcessingPool as Pool
 from timeit import default_timer
+from bisect import bisect_left
 
 
 def eval_func(func, pts, n_proc=1, seeds=None, seed_func=None, save_files=None):
@@ -223,3 +224,112 @@ def scale_one_zero(arr):
         scale_arr = np.ones_like(arr)
         
     return scale_arr
+
+
+def eff_npt(pt, domain):
+    """
+    Get effective number of points within in a box-shaped domain.
+    The effective number ``n_{eff}`` is computed by first uniformly partitioning the domain
+    into cells with the number of cells per dimension being equal to ``ceil(n^{1/d})``, 
+    where ``n`` is the number of points. Then ``n_{eff}`` is the number of cells that 
+    are occupied by at least one point.
+    
+    Args:
+        
+        pt (2d array): Points in the domain.
+        
+        domain (list of tuples): Box-shaped domain.
+            For example, `domain` = [(0, 1), (0, 2)] means defining a 2D domain: 
+            with first coordinate in [0, 1] and second coordinate in [0, 2].
+                
+    Returns:
+        
+        n_eff (int): Effective number of points.
+    """
+    npt, dim = pt.shape
+    assert(dim == len(domain))
+    m = int(np.ceil(npt**(1./dim)))
+    assert(m>1)
+    # find grid for each axis
+    grid_arr = np.zeros((dim, m+1))
+    for j, axis_bd in enumerate(domain):
+        grid_arr[j] = np.linspace(axis_bd[0], axis_bd[1], num=m+1)
+    # find location of each sample (save in string)
+    loc_samp = ['']*npt
+    for i in range(npt):
+        for j, grid in enumerate(grid_arr):
+            assert(grid[0] <= pt[i, j] <=grid[-1])
+            ix = bisect_left(grid, pt[i, j])
+            assert(ix < m+1)
+            loc = 0 if ix == 0 else ix-1
+            loc_samp[i] += str(loc)
+    # find number of samples with unique location
+    n_eff = len(set(loc_samp))        
+    assert(n_eff <= npt)
+    
+    return n_eff
+
+
+def boxify(pt, domain):
+    """
+    Check whether each point is in the box-shaped domain.
+
+    Args:
+        
+        pt (2d array): Points.
+        
+        domain (list of tuples): Box-shaped domain.
+            For example, `domain` = [(0, 1), (0, 2)] means defining a 2D domain: 
+            with first coordinate in [0, 1] and second coordinate in [0, 2].
+    Returns:
+        
+        in_box_ix (1d array of bool): Indicate whether each point in `pt` is in the box.
+        
+        out_box_ix (1d array of bool): Indicate whether each point in `pt` is out of the box.
+    """
+    npt, dim = pt.shape
+    for i in range(dim):
+        assert(domain[i][0] < domain[i][1])
+        ix = np.logical_and(domain[i][0] <= pt[:, i], domain[i][1] >= pt[:, i])
+        if i == 0:
+            in_box_ix = ix # indicates whether the points are in the box
+        else:
+            in_box_ix = np.logical_and(in_box_ix,ix)
+    out_box_ix = np.logical_not(in_box_ix)
+    
+    return in_box_ix, out_box_ix
+
+
+def domain_intersect(domain1, domain2):
+    """
+    Find intersection of two domains.
+    
+    Args:
+        
+        domain1 (list of tuples): First box-shaped domain.
+            For example, `domain1` = [(0, 1), (0, 2)] means defining a 2D domain: 
+            with first coordinate in [0, 1] and second coordinate in [0, 2].
+        
+        domain2 (list of tuples): Second box-shaped domain.
+            For example, `domain2` = [(0, 1), (0, 2)] means defining a 2D domain: 
+            with first coordinate in [0, 1] and second coordinate in [0, 2].
+            
+    Returns:
+        
+        inter_domain (list of tuples or None): Intersection of `domain1` and `domain2`. 
+            If None, then the intersection is empty.
+    """
+    lb1, ub1 = zip(*domain1)
+    lb2, ub2 = zip(*domain2)
+    lb1, ub1 = np.array(lb1), np.array(ub1)
+    lb2, ub2 = np.array(lb2), np.array(ub2)
+    assert(np.all(ub1>=lb1) and np.all(ub2>=lb2))
+    assert(lb1.shape==ub1.shape==lb2.shape==ub2.shape)
+    inter_lb = np.maximum(lb1,lb2)
+    inter_ub = np.minimum(ub1,ub2)
+    if np.all(inter_ub>inter_lb):
+        inter_domain = list(zip(inter_lb, inter_ub))
+    else:
+        inter_domain = None
+        
+    return inter_domain
