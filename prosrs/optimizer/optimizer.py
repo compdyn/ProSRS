@@ -7,12 +7,12 @@ about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-so
 Implement ProSRS algorithm.
 """
 import numpy as np
-import os, sys
+import os, sys, pickle, shutil
 from timeit import default_timer
 from pyDOE import lhs
 from scipy.spatial.distance import cdist
 from pathos.multiprocessing import ProcessingPool as Pool
-from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP
+from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP, STATE_NPZ_TEMP_FILE_TEMP, STATE_PKL_TEMP_FILE_TEMP
 from ..utility.classes import std_out_logger, std_err_logger
 from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one, eff_npt, boxify, domain_intersect
 from .surrogate import RBF_reg
@@ -31,7 +31,7 @@ class Optimizer:
             
             prob (`prosrs.Problem` type): Optimization problem.
             
-            n_worker (int): Number of workers in the optimization.
+            n_worker (int): Number of workers for the optimization.
                 This also determines the number of proposed or evaluated
                 points per iteration.
             
@@ -100,8 +100,12 @@ class Optimizer:
         self._n_iter_doe = min(self._n_iter, self._n_iter_doe) if self._n_iter is not None else self._n_iter_doe # adjusted for the fact that self._n_iter_doe <= self._n_iter.
         self._n_doe_samp = self._n_iter_doe * self._n_worker # number of DOE samples
         self._n_cand = self._n_cand_fact * self._dim # number of candidate points in SRS method
-        self._state_npz_file = os.path.join(self._out_dir, STATE_NPZ_FILE_TEMP % self._prob.name) # file that saves optimizer state (useful for resume)
-        self._state_pkl_file = os.path.join(self._out_dir, STATE_PKL_FILE_TEMP % self._prob.name) # file that saves optimizer state (useful for resume)
+        self._state_npz_file = os.path.join(self._out_dir, STATE_NPZ_FILE_TEMP % self._prob.name) # file that saves optimizer state (needed for resume)
+        self._state_pkl_file = os.path.join(self._out_dir, STATE_PKL_FILE_TEMP % self._prob.name) # file that saves optimizer state (needed for resume)
+        self._state_npz_lock_file = self._state_npz_file+'.lock' # a lock file that may be generated in some system, which prevents reading data from `self._state_npz_file`.
+        self._state_pkl_lock_file = self._state_pkl_file+'.lock' # a lock file that may be generated in some system, which prevents reading data from `self._state_pkl_file`.
+        self._state_npz_temp_file = os.path.join(self._out_dir, STATE_NPZ_TEMP_FILE_TEMP % self._prob.name) # a temporary file that holds data for `self._state_npz_file`.
+        self._state_pkl_temp_file = os.path.join(self._out_dir, STATE_PKL_TEMP_FILE_TEMP % self._prob.name) # a temporary file that holds data for `self._state_pkl_file`.
         self._pool_rbf = Pool() if self._n_proc_master is None else Pool(nodes=self._n_proc_master)
         
         # sanity check
@@ -188,8 +192,8 @@ class Optimizer:
                 If None, then standard errors will not be saved to a file.
             
         """            
-        # Log standard outputs and standard errors.
-        # Here we write to a new file if we do not resume. Otherwise, we append to the old file.
+        # log standard outputs and standard errors.
+        # here we write to a new file if we do not resume. Otherwise, we append to the old file.
         if std_out_file is not None:
             if not self._resume:
                 if os.path.isfile(std_out_file):
@@ -205,10 +209,8 @@ class Optimizer:
         while not self.is_done():
             # propose new points
             new_pt = self.propose(verbose=verbose)
-            
             # evaluate proposed points
             new_val = self.eval_pt(new_pt, verbose=verbose)
-            
             # update optimizer state with the new evaluations
             self.update(new_pt, new_val, verbose=verbose)
             
@@ -865,6 +867,37 @@ class Optimizer:
         return new_pt
         
     
+    def eval_pt(self, x, verbose=True):
+        """
+        Evaluate proposed points.
+        
+        Args:
+            
+            x (2d array): Points to be evaluated. Each row is one point.
+            
+            verbose (bool, optional): Whether to verbose about the evaluation.
+        
+        Returns:
+            
+            y (1d array): Evaluations of points in `x`.
+        """
+        # FIXME: add verbose
+        np.random.set_state(self.random_state)
+        
+        t1 = default_timer()
+        
+        self.eval_seeds = self._seed+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
+        y = eval_func(self._prob.f, x, n_proc=self._n_worker, seeds=self.eval_seeds.tolist(),
+                      seed_func=self._seed_func)
+        
+        t2 = default_timer()
+        self.t_eval = t2-t1
+        
+        self.random_state = np.random.get_state()
+        
+        return y
+    
+    
     def update(self, new_x, new_y, verbose=True):
         """
         Update the state of the optimizer.
@@ -1009,39 +1042,8 @@ class Optimizer:
         t2 = default_timer()
         self.t_update_arr = np.append(self.t_update_arr, t2-t1)
         
+        self.random_state = np.random.get_state()
         self.save_state()
-        self.random_state = np.random.get_state()
-        
-    
-    def eval_pt(self, x, verbose=True):
-        """
-        Evaluate proposed points.
-        
-        Args:
-            
-            x (2d array): Points to be evaluated. Each row is one point.
-            
-            verbose (bool, optional): Whether to verbose about the evaluation.
-        
-        Returns:
-            
-            y (1d array): Evaluations of points in `x`.
-        """
-        # FIXME: add verbose
-        np.random.set_state(self.random_state)
-        
-        t1 = default_timer()
-        
-        self.eval_seeds = self._seed+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
-        y = eval_func(self._prob.f, x, n_proc=self._n_worker, seeds=self.eval_seeds.tolist(),
-                      seed_func=self._seed_func)
-        
-        t2 = default_timer()
-        self.t_eval = t2-t1
-        
-        self.random_state = np.random.get_state()
-        
-        return y
    
      
     def is_done(self):
@@ -1097,49 +1099,55 @@ class Optimizer:
         """
         Save the state of the optimizer to files.
         """
-        # FIXME: rewrite the following
+        # save state to pickle file
+        with open(self._state_pkl_temp_file, 'wb') as f:
+            pickle.dump(self.random_state, f) # first save to temporary file, preventing data loss due to termination during execution of `pickl.dump`
+        shutil.copy2(self._state_pkl_temp_file, self._state_pkl_file) # create a new or overwrite the old `self._state_pkl_file`
+        os.remove(self._state_pkl_temp_file) # remove temporary file
         
-        # save random state to pickle file for possible resume
-        if os.path.isfile(result_pkl_file):
-            os.remove(result_pkl_file) # remove file if exists 
-        with open(result_pkl_file,'wb') as f:
-            pickle.dump(np.random.get_state(),f)
-            
-        # save to npz file
-        temp_result_npz_file = result_npz_file+TEMP_RESULT_NPZ_FILE_SUFFIX # first save to temporary file to avoid loss of data upon termination
-        np.savez(temp_result_npz_file,
-                 # experiment condition parameters
-                 init_iter=init_iter,opt_iter=k+1,n_proc=n_proc,n_core_node=n_core_node,seed=seed,outdir=outdir,save_samp=save_samp,verbose=verbose,
-                 n_cand_fact=n_cand_fact,use_eff_n_samp=use_eff_n_samp,init_beta=init_beta,
-                 normalize_data=normalize_data,init_gamma=init_gamma,delta_gamma=delta_gamma,
-                 max_n_reduce_sigma=max_n_reduce_sigma,rho=rho,init_sigma=init_sigma,
-                 init_p=init_p,alpha=alpha,wgt_pat_bd=wgt_pat_bd,
-                 lambda_range=lambda_range,
-                 n_fold=n_fold,resol=resol,min_beta=min_beta,rbf_kernel=rbf_kernel,
-                 func_bd=func_bd,max_C_fail=max_C_fail,resume_iter=resume_iter,n_iter=n_iter,
-                 # optimization results
-                 t_build_arr=t_build_arr[:k+1],t_prop_arr=t_prop_arr[:k+1],
-                 t_srs_arr=t_srs_arr[:k+1],
-                 t_eval_arr=t_eval_arr[:k+1],t_update_arr=t_update_arr[:k+1],
-                 gSRS_pct_arr=gSRS_pct_arr[:k+1],zoom_lv_arr=zoom_lv_arr[:k+1],
+        # save state to npz file
+        np.savez(self._state_npz_temp_file,
+                 # constant parameters
+                 _dim=self._dim, _n_worker=self._n_worker, _n_proc_master=self._n_proc_master, _n_iter=self._n_iter,
+                 _n_restart=self._n_restart, _resume=self._resume, _seed=self._seed, _out_dir=self._out_dir, 
+                 _n_cand_fact=self._n_cand_fact, _wgt_pat_bd=self._wgt_pat_bd, _normalize_data=self._normalize_data,
+                 _init_gamma=self._init_gamma, _delta_gamma=self._delta_gamma, _init_sigma=self._init_sigma, 
+                 _max_n_reduce_sigma=self._max_n_reduce_sigma, _rho=self._rho, _init_p=self._init_p,
+                 _init_beta=self._init_beta, _min_beta=self._min_beta, _alpha=self._alpha, _lambda_range=self._lambda_range,
+                 _rbf_kernel=self._rbf_kernel, _rbf_poly_deg=self._rbf_poly_deg, _n_fold=self._n_fold, _resol=self._resol,
+                 _use_eff_n_samp=self._use_eff_n_samp, _max_C_fail=self._max_C_fail, _n_iter_doe=self._n_iter_doe,
+                 _n_doe_samp=self._n_doe_samp, _n_cand=self._n_cand, _state_npz_file=self._state_npz_file,
+                 _state_pkl_file=self._state_pkl_file, _state_npz_lock_file=self._state_npz_lock_file,
+                 _state_pkl_lock_file=self._state_pkl_lock_file, _state_npz_temp_file=self._state_npz_temp_file,
+                 _state_pkl_temp_file=self._state_pkl_temp_file,
                  # state variables
-                 full_restart=full_restart,zoom_lv=zoom_lv,act_node_ix=act_node_ix,
-                 X_all=X_all,Y_all=Y_all,tree=tree,n_full_restart=n_full_restart,
-                 seed_base=seed_base,seed_flat_arr=seed_flat_arr,
-                 X_samp_restart=X_samp_restart)
+                 i_iter=self.i_iter, i_restart=self.i_restart, doe_samp=self.doe_samp, i_iter_doe=self.i_iter_doe,
+                 t_build_arr=self.t_build_arr, t_srs_arr=self.t_srs_arr, t_prop_arr=self.t_prop_arr,
+                 t_eval_arr=self.t_eval_arr, t_update_arr=self.t_update_arr, gSRS_pct_arr=self.gSRS_pct_arr,
+                 zoom_lv_arr=self.zoom_lv_arr, x_all=self.x_all, y_all=self.y_all, seed_all=self.seed_all,
+                 best_x=self.best_x, best_y=self.best_y, zoom_lv=self.zoom_lv, act_node_ix=self.act_node_ix,
+                 srs_wgt_pat=self.srs_wgt_pat, tree=self.tree)
         
-        shutil.copy2(temp_result_npz_file,result_npz_file) # overwrite the original one
-        os.remove(temp_result_npz_file) # remove temporary file
+        shutil.copy2(self._state_npz_temp_file, self._state_npz_file)
+        os.remove(self._state_npz_temp_file) # remove temporary file
    
     
     def load_state(self):
         """
         Load the state of the optimizer from files.
-        """
-        # FIXME: rewrite the following
-        
-        t1 = default_timer()
+        """        
+        # load state data from pkl file
+        if os.path.isfile(self._state_pkl_lock_file):
+            os.remove(self._state_pkl_lock_file) # remove lock file, if there's any
+        with open(self._state_pkl_file, 'rb') as f:
+            self.random_state = pickle.load(f)
             
+        # load state data from npz file and check consistency
+        
+        # FIXME: rewrite the following 
+        
+        
+        ############################################################
         resume_opt_iter = resume_iter-init_iter
         resume_opt_iter = int(resume_opt_iter) # convert to integer type if not
         # remove lock file if exists
@@ -1185,17 +1193,6 @@ class Optimizer:
         gSRS_pct_arr[:resume_opt_iter] = data['gSRS_pct_arr']
         zoom_lv_arr[:resume_opt_iter] = data['zoom_lv_arr']
         
-        # load random state
-        result_pkl_lock_file = result_pkl_file+'.lock'
-        if os.path.isfile(result_pkl_lock_file):
-            os.remove(result_pkl_lock_file)
-        with open(result_pkl_file, 'rb') as f:
-            np.random.set_state(pickle.load(f))
-            
-        t2 = default_timer()
-        t_resume = t2-t1
-        if verbose:
-            print('\ntime to prepare resume = %.2e sec' % t_resume)
             
         
     def visualize(self, fig_paths={'optim_curve': None, 'zoom_level': None, 'time': None}):
@@ -1212,3 +1209,37 @@ class Optimizer:
                 then a plot will be shown, and will be saved to this key value.
         """
     
+    
+    def posterior_eval(self, n_top=0.1, n_repeat=10, n_worker=None):
+        """
+        Posterior Monte Carlo evaluations for selecting the true best point.
+        
+        Args:
+            
+            n_top (float or int, optional): Proportion/number of top points to be evaluated.
+                If ``float``, then `n_top` in (0, 1) is the proportion of top points
+                among all the evaluated points. If ``int``, then `n_top`, a positive
+                integer, is the number of top points to be evaluated.
+            
+            n_repeat (int, optional): Number of Monte Carlo repeats for the evaluations.
+            
+            n_worker (int or None, optional): Number of workers for the evaluations.
+                Used for parallel computing. If None, then we use the default value = 
+                `self._n_worker`.
+        
+        Returns:
+            
+            top_pt (2d array): Evaluated top points. 
+                Each row is one point.
+            
+            top_val (2d array): (Noisy) function values at `top_pt`. 
+                Each row is `n_repeat` Monte Carlo evaluations of one point
+                (i.e., ``top_eval.shape[1] = n_repeat``).
+            
+            top_mean_val (1d array): Mean estimates of function values of `top_pt`.
+                In essense, these are estimates for the true expectation ``self._prob.F(top_pt)``.
+            
+            top_std_val (1d array): Standard deviation estimates of function values of top_pt`.
+                In essence, these are std estimates for the random noises in ``self._prob.f``
+                at `top_pt`.
+        """

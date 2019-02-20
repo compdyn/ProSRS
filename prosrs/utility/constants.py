@@ -9,3 +9,5 @@ Define constants.
 # file templates
 STATE_NPZ_FILE_TEMP = 'optimizer_state_%s.npz' # file that saves optimizer state (%s is optimization problem name)
 STATE_PKL_FILE_TEMP = 'optimizer_state_%s.pkl' # file that saves optimizer state (%s is optimization problem name)
+STATE_NPZ_TEMP_FILE_TEMP = 'optimizer_state_%s.temp.npz' # temporary file that saves optimizer state (%s is optimization problem name)
+STATE_PKL_TEMP_FILE_TEMP = 'optimizer_state_%s.temp.pkl' # temporary file that saves optimizer state (%s is optimization problem name)
