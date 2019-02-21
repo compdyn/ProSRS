@@ -10,6 +10,7 @@ import numpy as np
 from scipy.special import xlogy
 from scipy import linalg
 import warnings
+from pathos.multiprocessing import ProcessingPool as Pool
 from sklearn import preprocessing
 from sklearn.model_selection import KFold
 from functools import partial
@@ -207,8 +208,8 @@ class Rbf(object):
         return y_val
     
     
-def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=False,
-            log_opt=True, n_fold=5, n_min_sm=10, kernel='multiquadric', pool=None, poly_deg=0):
+def RBF_reg(X, Y, sm_range, n_proc=1, normalize_data=True, wgt_expon=0., use_scipy_rbf=False,
+            log_opt=True, n_fold=5, n_min_sm=10, kernel='multiquadric', poly_deg=0):
     """
     Construct a RBF regression model using L2 regularization.
     
@@ -224,6 +225,9 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
             on the domain `sm_range`. If ``float``, then the smoothing parameter is equal to
             `sm_range` (no cross validation in this case).
         
+        n_proc (int, optional): Number of parallel processes (cores) to be used for training RBF models.
+            If one, then we conduct training in serial.
+            
         normalize_data (bool, optional): Whether to normalize data before training a RBF model.
         
         wgt_expon (float, optional): Weight exponent in RBF regression ('gamma').
@@ -243,10 +247,6 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
         
         kernel (str, optional): RBF kernel. For the possible values and their meanings, see
             `scipy.interpolate.Rbf <https://docs.scipy.org/doc/scipy-0.19.0/reference/generated/scipy.interpolate.Rbf.html>`.
-        
-        pool (`pathos.multiprocessing.ProcessingPool` type or None, optional): Pool object for parallel computing. 
-            Here we use `pathos package <https://pypi.org/project/pathos/0.2.0>` for parallelism.
-            If None, then the cross validation will be conducted in serial.
             
         poly_deg (int, optional): Degree of RBF polynomial tail (either 0 or 1). 
             If zero, then no polynomial tail. Useful only when `use_scipy_rbf` = False.
@@ -266,7 +266,7 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
     # sanity check
     assert(len(X) == len(Y) > 0)
     assert(len(sm_range) in [1, 2])
-    assert(n_fold > 1)
+    assert(n_fold > 1 and n_proc>=1 and type(n_proc) is int)
     
     n_uniq = len(unique_row(X)) # find number of unique X
     if n_uniq > 1:
@@ -284,7 +284,6 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
             sm_lw, sm_up = sm_range
             assert(sm_lw < sm_up), 'invalid sm_range'
             
-            n_proc = pool.nodes
             n_iter = int(np.ceil(n_min_sm/float(n_proc))) # number of iterations
             n_req = n_proc*n_iter # total number of requested points
             assert(n_req >= n_min_sm > 0) # sanity check
@@ -293,15 +292,22 @@ def RBF_reg(X, Y, sm_range, normalize_data=True, wgt_expon=0., use_scipy_rbf=Fal
                 smooth = np.logspace(np.log10(sm_lw), np.log10(sm_up), n_req)
             else:
                 smooth = np.logspace(sm_lw,sm_up,n_req)
+                
             
-            if pool is None:
-                # then we compute in serial 
-                cv_err = [CV_smooth(s, X, Y, n_fold, kernel, use_scipy_rbf, wgt_expon, poly_deg) for s in smooth]
-            else:
-                # then we compute in parallel
-                CV_smooth_partial = partial(CV_smooth, X=X, Y=Y, n_fold=n_fold, kernel=kernel,
-                                            use_scipy_rbf=use_scipy_rbf, wgt_expon=wgt_expon, poly_deg=poly_deg)        
-                cv_err = pool.map(CV_smooth_partial, smooth, chunksize=n_iter)
+            # FIXME: we disable parallel computing for now
+            cv_err = [CV_smooth(s, X, Y, n_fold, kernel, use_scipy_rbf, wgt_expon, poly_deg) for s in smooth]
+#            if n_proc == 1:
+#                # then we compute in serial 
+#                cv_err = [CV_smooth(s, X, Y, n_fold, kernel, use_scipy_rbf, wgt_expon, poly_deg) for s in smooth]
+#            else:
+#                # then we compute in parallel
+#                CV_smooth_partial = partial(CV_smooth, X=X, Y=Y, n_fold=n_fold, kernel=kernel,
+#                                            use_scipy_rbf=use_scipy_rbf, wgt_expon=wgt_expon, poly_deg=poly_deg)
+#                pool = Pool(nodes=n_proc)
+#                cv_err = pool.map(CV_smooth_partial, smooth, chunksize=n_iter)
+#                pool.close()
+            
+            
             # find smoothing parameter that has the lowest cross-validated error
             opt_ix = np.argmin(cv_err)
             opt_sm = smooth[opt_ix]

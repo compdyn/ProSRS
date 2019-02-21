@@ -283,14 +283,17 @@ def RBF_reg(X,Y,n_proc,sm_range,normalize_data=True,wgt_expon=0.0,use_scipy_rbf=
             else:
                 smooth = np.logspace(sm_lw,sm_up,n_req)
             
-            if pool is None:
-                # then we compute in serial 
-                cv_err_arr = [CV_smooth(s,X,Y,n_fold,kernel,use_scipy_rbf,wgt_expon,poly_deg) for s in smooth]
-            else:
-                # then we compute in parallel
-                CV_smooth_partial = partial(CV_smooth,X=X,Y=Y,n_fold=n_fold,kernel=kernel,
-                                            use_scipy_rbf=use_scipy_rbf,wgt_expon=wgt_expon,poly_deg=poly_deg)        
-                cv_err_arr = pool.map(CV_smooth_partial,smooth,chunksize=n_iter)
+            # FIXME: we disable parallel computing for now
+            cv_err_arr = [CV_smooth(s,X,Y,n_fold,kernel,use_scipy_rbf,wgt_expon,poly_deg) for s in smooth]
+#            if pool is None:
+#                # then we compute in serial 
+#                cv_err_arr = [CV_smooth(s,X,Y,n_fold,kernel,use_scipy_rbf,wgt_expon,poly_deg) for s in smooth]
+#            else:
+#                # then we compute in parallel
+#                CV_smooth_partial = partial(CV_smooth,X=X,Y=Y,n_fold=n_fold,kernel=kernel,
+#                                            use_scipy_rbf=use_scipy_rbf,wgt_expon=wgt_expon,poly_deg=poly_deg)
+#                cv_err_arr = pool.map(CV_smooth_partial,smooth,chunksize=n_iter)
+                
             # find smooth parameter that has smallest cv error
             opt_ix = np.argmin(cv_err_arr)
             opt_sm = smooth[opt_ix]
@@ -940,8 +943,8 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
             assert(n_cand_fact*dim >= n_proc), 'number of candidate points needs to be no less than n_proc'
             
             # get pool of processes for parallel computing
-            pool_eval = Pool(processes=n_proc) # for function evaluations
-            pool_rbf = Pool(processes=n_core_node) # for training rbf surrogate
+            pool_eval = Pool(nodes=n_proc) # for function evaluations
+            pool_rbf = Pool(nodes=n_core_node) # for training rbf surrogate
                 
             # sanity check
             assert(wgt_expon_delta >= 0 and max_reduce_step_size>=0 and 0<=init_gSRS_pct<=1)  
@@ -1629,7 +1632,7 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
         
         except:
             # error handling
-            if comm.rank == 0:
+            if comm is not None and comm.rank == 0:
                 comm.Abort() # kill all the other processes so that the program does not run forever
     
     else:

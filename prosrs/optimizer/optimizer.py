@@ -11,7 +11,6 @@ import os, sys, pickle, shutil, warnings
 from timeit import default_timer
 from pyDOE import lhs
 from scipy.spatial.distance import cdist
-from pathos.multiprocessing import ProcessingPool as Pool
 from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP, STATE_NPZ_TEMP_FILE_TEMP, STATE_PKL_TEMP_FILE_TEMP
 from ..utility.classes import std_out_logger, std_err_logger
 from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one, eff_npt, boxify, domain_intersect
@@ -22,7 +21,7 @@ class Optimizer:
     """
     A class that handles optimization using ProSRS algorithm.
     """
-    def __init___(self, prob, n_worker, n_proc_master=None, n_iter=None, n_iter_doe=None, 
+    def __init__(self, prob, n_worker, n_proc_master=None, n_iter=None, n_iter_doe=None, 
                   n_restart=2, resume=False, seed=1, seed_func=None, out_dir='out'):
         """
         Constructor.
@@ -94,7 +93,7 @@ class Optimizer:
         self._rbf_poly_deg = 0 # degree of RBF polynomial tail (either 0 or 1). If zero, then no polynomial tail.
         self._n_fold = 5 # number of folds for the cross validation in training a RBF model.
         self._resol = 0.01 # resolution parameter for restart.
-        self._use_eff_n_samp = True # whether to use effective number of samples for the dynamics of p value.
+        self._use_eff_npt = True # whether to use effective number of points for the dynamics of p value.
         self._max_C_fail = max(2, int(np.ceil(self._dim/float(self._n_worker)))) # maximum number of consecutive failures before halving self.sigma value.
         self._n_iter_doe = int(np.ceil(3/float(self._n_worker))) if n_iter_doe is None else n_iter_doe # number of iterations for DOE.
         self._n_iter_doe = min(self._n_iter, self._n_iter_doe) if self._n_iter is not None else self._n_iter_doe # adjusted for the fact that self._n_iter_doe <= self._n_iter.
@@ -106,7 +105,6 @@ class Optimizer:
         self._state_pkl_lock_file = self._state_pkl_file+'.lock' # a lock file that may be generated in some system, which prevents reading data from `self._state_pkl_file`.
         self._state_npz_temp_file = os.path.join(self._out_dir, STATE_NPZ_TEMP_FILE_TEMP % self._prob.name) # a temporary file that holds data for `self._state_npz_file`.
         self._state_pkl_temp_file = os.path.join(self._out_dir, STATE_PKL_TEMP_FILE_TEMP % self._prob.name) # a temporary file that holds data for `self._state_pkl_file`.
-        self._pool_rbf = Pool() if self._n_proc_master is None else Pool(nodes=self._n_proc_master)
         
         # sanity check
         # TODO: check the type of `self._prob`
@@ -138,6 +136,8 @@ class Optimizer:
         
         # initialize the state of the optimizer
         if not self._resume:
+            np.random.seed(self._seed) # set random seed.
+            self.random_state = np.random.get_state() # FIXME: check necessity of passing random state within the class.
             self.i_iter = 0 # iteration index (how many iterations have been run)
             self.i_restart = 0 # restart index (how many restarts have been initiated)
             self.doe_samp = self.doe() # DOE samples
@@ -156,8 +156,6 @@ class Optimizer:
             self.seed_all = np.zeros(0) # random seeds for points in `self.x_all`.
             self.best_x = np.ones(self._dim)*np.nan # best point so far.
             self.best_y = np.nan # (noisy) y value of the best point `self.best_x`.
-            np.random.seed(self._seed) # set random seed.
-            self.random_state = np.random.get_state() # FIXME: check necessity of passing random state within the class.
             self.zoom_lv = 0 # zoom level (zero-based).
             self.act_node_ix = 0 # index of the activate node for the zoom level `self.zoom_lv` (zero-based).
             self.srs_wgt_pat = np.linspace(self._wgt_pat_bd[0], self._wgt_pat_bd[1], self._n_worker) # weight pattern in the SRS method.
@@ -177,13 +175,11 @@ class Optimizer:
                 the more detailed information will be displayed.
         """
     
-    def run(self, verbose=True, std_out_file=None, std_err_file=None):
+    def run(self, std_out_file=None, std_err_file=None, verbose=True):
         """
         Run ProSRS algorithm.
         
         Args:
-                
-            verbose (bool, optional): Whether to verbose while running the algorithm.
             
             std_out_file (str or None, optional): Standard output file path.
                 If ``str``, then standard outputs will be directed to the file `std_out_file`.
@@ -192,8 +188,10 @@ class Optimizer:
             std_err_file (str or None, optional): Standard error file path.
                 If ``str``, then standard errors will be directed to the file `std_err_file`.
                 If None, then standard errors will not be saved to a file.
-            
-        """            
+                
+            verbose (bool, optional): Whether to verbose while running the algorithm.     
+        """ 
+        # FIXME: check verbose           
         # log standard outputs and standard errors.
         # here we write to a new file if we do not resume. Otherwise, we append to the old file.
         if std_out_file is not None:
@@ -209,16 +207,16 @@ class Optimizer:
         
         # main loop
         while not self.is_done():
+            
+            if verbose:
+                print('\nIteration = %d' % (self.i_iter+1))
+                
             # propose new points
-            new_pt = self.propose(verbose=verbose)
+            new_pt = self.propose(verbose=verbose)            
             # evaluate proposed points
             new_val = self.eval_pt(new_pt, verbose=verbose)
             # update optimizer state with the new evaluations
             self.update(new_pt, new_val, verbose=verbose)
-            
-            if verbose:
-                # TODO: display some summary of results
-                pass
             
             # flush standard outputs and standard errors to files
             if std_out_file is not None:
@@ -242,11 +240,15 @@ class Optimizer:
             
             samp (2d array): LHS samples. Each row is one sample.
         """
+        np.random.set_state(self.random_state)
+        
         unit_X = lhs(self._dim, samples=self._n_doe_samp, criterion=criterion) # unit_X: 2d array in unit cube
         samp = np.zeros_like(unit_X)
         for i in range(self._dim):
             samp[:, i] = unit_X[:, i]*(self._prob.domain[i][1]-self._prob.domain[i][0])+self._prob.domain[i][0] # scale and shift
-            
+        
+        self.random_state = np.random.get_state()
+        
         return samp
     
     
@@ -330,10 +332,10 @@ class Optimizer:
             t1 = default_timer()
             
             # FIXME: we may not need `opt_sm` eventually
-            self.rbf_mod, opt_sm, _, _ = RBF_reg(self.x_node, self.y_node, self._lambda_range,
-                                            normalize_data=self._normalize_data, wgt_expon=self.gamma,
-                                            n_fold=self._n_fold, kernel=self._rbf_kernel, pool=self._pool_rbf,
-                                            poly_deg=self._rbf_poly_deg)                
+            self.rbf_mod, opt_sm, _, _ = RBF_reg(self.x_node, self.y_node, self._lambda_range, n_proc=self._n_proc_master,
+                                                 normalize_data=self._normalize_data, wgt_expon=self.gamma,
+                                                 n_fold=self._n_fold, kernel=self._rbf_kernel, 
+                                                 poly_deg=self._rbf_poly_deg)                
             t2 = default_timer()
             self.t_build = t2-t1
             
@@ -380,7 +382,9 @@ class Optimizer:
         Returns:
             
             new_pt (2d array): Proposed points.
-        """        
+        """
+        np.random.set_state(self.random_state)
+        
         # generate candidate points
         if self.gSRS_pct == 1:            
             # generate candidate points uniformly (global SRS)
@@ -449,6 +453,8 @@ class Optimizer:
             cand_pt = np.delete(cand_pt, min_ix, axis=0)
             n_cand -= 1
             
+        self.random_state = np.random.get_state()
+        
         return new_pt
         
     
@@ -466,18 +472,21 @@ class Optimizer:
             
             y (1d array): Evaluations of points in `x`.
         """
-        # FIXME: add verbose
+        # FIXME: check verbose
         np.random.set_state(self.random_state)
         
         t1 = default_timer()
         
-        self.eval_seeds = self._seed+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
+        self.eval_seeds = self._seed+1+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
         y = eval_func(self._prob.f, x, n_proc=self._n_worker, seeds=self.eval_seeds.tolist(),
                       seed_func=self._seed_func)
         
         t2 = default_timer()
         self.t_eval = t2-t1
         
+        if verbose:
+            print('time to evaluate points = %.2e sec' % self.t_eval)
+            
         self.random_state = np.random.get_state()
         
         return y
@@ -525,11 +534,11 @@ class Optimizer:
                     else np.array([self._wgt_pat_bd[1]]) # alternating weights
             # update tree node
             npt = len(self.x_tree)
-            self.act_node['ix'] = np.append(self.act_node['ix'], np.arange(npt, npt+self._n_worker, dtype=int))
+            self.act_node['ix'] = np.append(self.act_node['ix'], np.arange(npt-self._n_worker, npt, dtype=int))
             if self._n_worker > 1 or (self._n_worker == 1 and self.srs_wgt_pat[0] == self._wgt_pat_bd[0]):
                 if self.p_val >= 0.1:
                     # compute p_val
-                    if self._use_eff_n_samp:
+                    if self._use_eff_npt:
                         eff_n = eff_npt(self.x_tree[self.act_node['ix']], self.act_node['domain'])
                     else:
                         eff_n = len(self.x_tree[self.act_node['ix']])
@@ -627,8 +636,11 @@ class Optimizer:
                         print('Zoom out!')
         
         t2 = default_timer()
-        self.t_update_arr = np.append(self.t_update_arr, t2-t1)
-        
+        t_update = t2-t1
+        self.t_update_arr = np.append(self.t_update_arr, t_update)
+        if verbose:
+            print('time to update optimizer = %.2e sec' % t_update)
+            
         self.random_state = np.random.get_state()
         self.save_state()
    
@@ -702,7 +714,7 @@ class Optimizer:
                  _max_n_reduce_sigma=self._max_n_reduce_sigma, _rho=self._rho, _init_p=self._init_p,
                  _init_beta=self._init_beta, _min_beta=self._min_beta, _alpha=self._alpha, _lambda_range=self._lambda_range,
                  _rbf_kernel=self._rbf_kernel, _rbf_poly_deg=self._rbf_poly_deg, _n_fold=self._n_fold, _resol=self._resol,
-                 _use_eff_n_samp=self._use_eff_n_samp, _max_C_fail=self._max_C_fail, _n_iter_doe=self._n_iter_doe,
+                 _use_eff_npt=self._use_eff_npt, _max_C_fail=self._max_C_fail, _n_iter_doe=self._n_iter_doe,
                  _n_doe_samp=self._n_doe_samp, _n_cand=self._n_cand, _state_npz_file=self._state_npz_file,
                  _state_pkl_file=self._state_pkl_file, _state_npz_lock_file=self._state_npz_lock_file,
                  _state_pkl_lock_file=self._state_pkl_lock_file, _state_npz_temp_file=self._state_npz_temp_file,
@@ -742,7 +754,7 @@ class Optimizer:
                and self._min_beta==data['_min_beta'] and self._alpha==data['_alpha']
                and np.all(self._lambda_range==data['_lambda_range']) and np.all(self._rbf_kernel==data['_rbf_kernel'])
                and self._rbf_poly_deg==data['_rbf_poly_deg'] and self._n_fold==data['_n_fold'] and self._resol==data['_resol']
-               and self._use_eff_n_samp==data['_use_eff_n_samp'] and self._max_C_fail==data['_max_C_fail']
+               and self._use_eff_npt==data['_use_eff_npt'] and self._max_C_fail==data['_max_C_fail']
                and self._n_cand==data['_n_cand']), 'To resume, experiment condition needs to be consistent with that of the last run.'
         # read state variables
         self.i_iter = data['i_iter'].item(0)

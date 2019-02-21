@@ -105,6 +105,8 @@ def eval_func(func, pts, n_proc=1, seeds=None, seed_func=None, save_files=None):
         assert(type(n_proc) is int)
         pool = Pool(nodes=n_proc)
         vals = np.array(pool.map(eval_wrapper, list(zip(pts, seeds, save_files))))
+        # FIXME: if we do pool.close(), we get assertion: assert self._state == RUN 
+#        pool.close()
     else:
         raise ValueError('Invalid n_proc value.')
     # sanity check
@@ -138,6 +140,8 @@ def unique_row(array):
         # get unique rows
         row_ix = np.append([True], np.any(np.diff(sorted_arr, axis=0), axis=1))
         unique_arr = sorted_arr[row_ix]
+    else:
+        unique_arr = array
         
     return unique_arr
 

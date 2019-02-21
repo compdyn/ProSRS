@@ -25,8 +25,8 @@ class Problem:
         
         Args:
             
-            func (callable): Function to be optimized over.
-                For example, ``func = lambda x: x[0]**2+x[1]**2``.
+            func (callable): Function to be optimized over, for which ithe nput is 1d array,
+                the output is a scalar. For example, ``func = lambda x: x[0]**2+x[1]**2``.
             
             domain (list of tuples): Optimization domain.
                 For example, `domain` = [(0, 1), (0, 2)] means optimizing the
