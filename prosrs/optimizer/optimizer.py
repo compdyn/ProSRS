@@ -8,6 +8,8 @@ Implement ProSRS algorithm.
 """
 import numpy as np
 import os, sys, pickle, shutil, warnings
+import multiprocessing as mp
+from pathos.multiprocessing import ProcessingPool as Pool
 from timeit import default_timer
 from pyDOE import lhs
 from scipy.spatial.distance import cdist
@@ -21,8 +23,8 @@ class Optimizer:
     """
     A class that handles optimization using ProSRS algorithm.
     """
-    def __init__(self, prob, n_worker, n_proc_master=None, n_iter=None, n_iter_doe=None, 
-                  n_restart=2, resume=False, seed=1, seed_func=None, out_dir='out'):
+    def __init__(self, prob, n_worker, n_iter=None, n_iter_doe=None, n_restart=2, resume=False, 
+                 seed=1, seed_func=None, parallel_training=False, out_dir='out'):
         """
         Constructor.
         
@@ -33,10 +35,6 @@ class Optimizer:
             n_worker (int): Number of workers for the optimization.
                 This also determines the number of proposed or evaluated
                 points per iteration.
-            
-            n_proc_master (int or None, optional): Number of parallel processes (cores)
-                that will be used in the master. If None, then all the available
-                processes (cores) of the master will be used.
                 
             n_iter (int or None, optional): Total number of iterations for the optimization.
                 If ``int``, the optimization will terminate upon finishing running `n_iter` iterations. 
@@ -61,6 +59,12 @@ class Optimizer:
                 Note: using ``numpy.random.seed`` may not always gaurantee
                 the reproducibility. Here we provide an option for users to specify their own routines.
             
+            parallel_training (bool, optional): Whether to train a RBF surrogate in parallel.
+                If True, then we will use all the available processes (cores) during training.
+                We use `pathos.multiprocessing` module for parallelism. Our tests have
+                shown that depending on the machine and the optimization function,
+                sometimes parallelism may cause memory issues. So we disable it by default.
+                
             out_dir (str, optional): Output directory.
                 All the output files (e.g., optimization status file) will be saved to
                 `out_dir` directory.
@@ -69,12 +73,12 @@ class Optimizer:
         self._prob = prob # optimization problem
         self._dim = prob.dim # dimention of optimization problem.
         self._n_worker = n_worker # number of workers.
-        self._n_proc_master = n_proc_master # number of parallel processes in the master.
         self._n_iter = n_iter # total number of iterations.
         self._n_restart = n_restart # total number of restarts.
         self._resume = resume # whether to resume from the last run.
         self._seed = seed # random seed for the optimizer.
         self._seed_func = seed_func # function for setting random seed for evaluations.
+        self._parallel_training = parallel_training # whether to use parallelism for training RBF models.
         self._out_dir = out_dir # output directory.
         self._n_cand_fact = 1000 # number of candidate = self._n_cand_fact * self._dim.
         self._wgt_pat_bd = [0.3, 1.] # the bound of the weight pattern in the SRS method.
@@ -99,6 +103,7 @@ class Optimizer:
         self._n_iter_doe = min(self._n_iter, self._n_iter_doe) if self._n_iter is not None else self._n_iter_doe # adjusted for the fact that self._n_iter_doe <= self._n_iter.
         self._n_doe_samp = self._n_iter_doe * self._n_worker # number of DOE samples
         self._n_cand = self._n_cand_fact * self._dim # number of candidate points in SRS method
+        self._pool_rbf = Pool(nodes=mp.cpu_count()) if self._parallel_training else None # parallel pool used for RBF regression
         self._state_npz_file = os.path.join(self._out_dir, STATE_NPZ_FILE_TEMP % self._prob.name) # file that saves optimizer state (needed for resume)
         self._state_pkl_file = os.path.join(self._out_dir, STATE_PKL_FILE_TEMP % self._prob.name) # file that saves optimizer state (needed for resume)
         self._state_npz_lock_file = self._state_npz_file+'.lock' # a lock file that may be generated in some system, which prevents reading data from `self._state_npz_file`.
@@ -109,7 +114,6 @@ class Optimizer:
         # sanity check
         # TODO: check the type of `self._prob`
         assert(type(self._n_worker) is int and self._n_worker > 0)
-        assert(type(self._n_proc_master) is int and self._n_proc_master > 0)
         assert(0 <= self._wgt_pat_bd[0] <= self._wgt_pat_bd[1] <= 1 and len(self._wgt_pat_bd) == 2)
         assert(self._delta_gamma >= 0)
         assert(type(self._max_n_reduce_sigma) is int and self._max_n_reduce_sigma >= 0)
@@ -195,11 +199,13 @@ class Optimizer:
         # log standard outputs and standard errors.
         # here we write to a new file if we do not resume. Otherwise, we append to the old file.
         if std_out_file is not None:
+            orig_std_out = sys.stdout
             if not self._resume:
                 if os.path.isfile(std_out_file):
                     os.remove(std_out_file)
             sys.stdout = std_out_logger(std_out_file)    
         if std_err_file is not None:
+            orig_std_err = sys.stderr
             if not self._resume:
                 if os.path.isfile(std_err_file):
                     os.remove(std_err_file)
@@ -212,7 +218,7 @@ class Optimizer:
                 print('\nIteration = %d' % (self.i_iter+1))
                 
             # propose new points
-            new_pt = self.propose(verbose=verbose)            
+            new_pt = self.propose(verbose=verbose)        
             # evaluate proposed points
             new_val = self.eval_pt(new_pt, verbose=verbose)
             # update optimizer state with the new evaluations
@@ -225,6 +231,12 @@ class Optimizer:
             if std_err_file is not None:
                 sys.stderr.terminal.flush()
                 sys.stderr.log.flush()
+        
+        # reset stdout and stderr
+        if std_out_file is not None:
+            sys.stdout = orig_std_out 
+        if std_err_file is not None:
+            sys.stderr = orig_std_err
         
         
     def doe(self, criterion='maximin'):
@@ -332,10 +344,10 @@ class Optimizer:
             t1 = default_timer()
             
             # FIXME: we may not need `opt_sm` eventually
-            self.rbf_mod, opt_sm, _, _ = RBF_reg(self.x_node, self.y_node, self._lambda_range, n_proc=self._n_proc_master,
+            self.rbf_mod, opt_sm, _, _ = RBF_reg(self.x_node, self.y_node, self._lambda_range,
                                                  normalize_data=self._normalize_data, wgt_expon=self.gamma,
                                                  n_fold=self._n_fold, kernel=self._rbf_kernel, 
-                                                 poly_deg=self._rbf_poly_deg)                
+                                                 poly_deg=self._rbf_poly_deg, pool=self._pool_rbf)                
             t2 = default_timer()
             self.t_build = t2-t1
             
@@ -707,8 +719,8 @@ class Optimizer:
         # save state to npz file
         np.savez(self._state_npz_temp_file,
                  # constant parameters
-                 _dim=self._dim, _n_worker=self._n_worker, _n_proc_master=self._n_proc_master, _n_iter=self._n_iter,
-                 _n_restart=self._n_restart, _resume=self._resume, _seed=self._seed, _out_dir=self._out_dir, 
+                 _dim=self._dim, _n_worker=self._n_worker, _n_iter=self._n_iter, _n_restart=self._n_restart, 
+                 _resume=self._resume, _seed=self._seed, _parallel_training=self._parallel_training, _out_dir=self._out_dir, 
                  _n_cand_fact=self._n_cand_fact, _wgt_pat_bd=self._wgt_pat_bd, _normalize_data=self._normalize_data,
                  _init_gamma=self._init_gamma, _delta_gamma=self._delta_gamma, _init_sigma=self._init_sigma, 
                  _max_n_reduce_sigma=self._max_n_reduce_sigma, _rho=self._rho, _init_p=self._init_p,

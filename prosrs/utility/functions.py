@@ -105,8 +105,6 @@ def eval_func(func, pts, n_proc=1, seeds=None, seed_func=None, save_files=None):
         assert(type(n_proc) is int)
         pool = Pool(nodes=n_proc)
         vals = np.array(pool.map(eval_wrapper, list(zip(pts, seeds, save_files))))
-        # FIXME: if we do pool.close(), we get assertion: assert self._state == RUN 
-#        pool.close()
     else:
         raise ValueError('Invalid n_proc value.')
     # sanity check
