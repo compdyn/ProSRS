@@ -77,18 +77,22 @@ class Problem:
     
     def __str__(self):
         """
-        Print out optimization problem info.
+        Display optimization problem info.
         
         Use ``print()`` method to call this function.
         """
         line = 'Optimization problem (dim = %d): %s\n' % (self.dim, self.name)
-        var_domain = {v:d for v,d in zip(self.x_var, self.domain)}
-        line += '- Domain: %s\n' % str(var_domain)
-        line += '- Y variable: %s\n' % str(self.y_var)
+        line += '- Domain: %s\n' % ('{'+', '.join(["'%s': %s" % (x, str(tuple(v))) for x, v in zip(self.x_var, self.domain)])+'}')
+        line += "- Y variable: '%s'\n" % str(self.y_var)
         if self.min_true_func is not None:
             line += '- Global minimum: %g\n' % self.min_true_func
+        else:
+            line += '- Global minimum: unknown\n'
         if self.min_loc is not None:
-            line += '- Global minimum locations:\n %s\n' % str(self.min_loc)
+            line += '- Global minimum locations:%s' % ', '.join(["%s = %s" % (str(tuple(self.x_var)), str(tuple(v)))\
+                                                                   for v in self.min_loc])
+        else:
+            line += '- Global minimum locations: unknown'
         return line
             
     def visualize(self, true_func=False, n_samples=None, plot_2d='contour', 

@@ -23,7 +23,7 @@ class Optimizer:
     """
     A class that handles optimization using ProSRS algorithm.
     """
-    def __init__(self, prob, n_worker, n_iter=None, n_iter_doe=None, n_restart=2, resume=False, 
+    def __init__(self, prob, n_worker, n_iter=None, n_iter_doe=None, n_cycle=2, resume=False, 
                  seed=1, seed_func=None, parallel_training=False, out_dir='out'):
         """
         Constructor.
@@ -38,14 +38,14 @@ class Optimizer:
                 
             n_iter (int or None, optional): Total number of iterations for the optimization.
                 If ``int``, the optimization will terminate upon finishing running `n_iter` iterations. 
-                If None, then we use number of restarts `n_restart` as the termination condition.
+                If None, then we use number of optimization cycles `n_cycle` as the termination condition.
             
             n_iter_doe (int or None, optional): Number of iterations for DOE.
                 If None, then we use default value.
                 
-            n_restart (int, optional): Total number of restarts for the optimization.
+            n_cycle (int, optional): Total number of optimization sycles.
                 This parameter takes effect only when `n_iter` is None, and 
-                the optimization will terminate upon finishing restarting `n_restart` times.
+                the optimization will terminate upon finishing `n_cycle` cycles.
             
             resume (bool, optional): Whether to resume from the last run.
                 The information of the last run will be read from the directory `out_dir`.
@@ -74,7 +74,7 @@ class Optimizer:
         self._dim = prob.dim # dimention of optimization problem.
         self._n_worker = n_worker # number of workers.
         self._n_iter = n_iter # total number of iterations.
-        self._n_restart = n_restart # total number of restarts.
+        self._n_cycle = n_cycle # total number of optimization cycles.
         self._resume = resume # whether to resume from the last run.
         self._seed = seed # random seed for the optimizer.
         self._seed_func = seed_func # function for setting random seed for evaluations.
@@ -96,7 +96,7 @@ class Optimizer:
         self._rbf_kernel = 'multiquadric' # RBF kernel. See `scipy.interpolate.Rbf <https://docs.scipy.org/doc/scipy-0.19.0/reference/generated/scipy.interpolate.Rbf.html>`.
         self._rbf_poly_deg = 0 # degree of RBF polynomial tail (either 0 or 1). If zero, then no polynomial tail.
         self._n_fold = 5 # number of folds for the cross validation in training a RBF model.
-        self._resol = 0.01 # resolution parameter for restart.
+        self._resol = 0.01 # resolution parameter for determining whether to restart.
         self._use_eff_npt = True # whether to use effective number of points for the dynamics of p value.
         self._max_C_fail = max(2, int(np.ceil(self._dim/float(self._n_worker)))) # maximum number of consecutive failures before halving self.sigma value.
         self._n_iter_doe = int(np.ceil(3/float(self._n_worker))) if n_iter_doe is None else n_iter_doe # number of iterations for DOE.
@@ -110,6 +110,7 @@ class Optimizer:
         self._state_pkl_lock_file = self._state_pkl_file+'.lock' # a lock file that may be generated in some system, which prevents reading data from `self._state_pkl_file`.
         self._state_npz_temp_file = os.path.join(self._out_dir, STATE_NPZ_TEMP_FILE_TEMP % self._prob.name) # a temporary file that holds data for `self._state_npz_file`.
         self._state_pkl_temp_file = os.path.join(self._out_dir, STATE_PKL_TEMP_FILE_TEMP % self._prob.name) # a temporary file that holds data for `self._state_pkl_file`.
+        self._verbose_dot_len = 10 # number of dots to display for verbose messages.
         
         # sanity check
         assert(type(self._n_worker) is int and self._n_worker > 0)
@@ -128,10 +129,10 @@ class Optimizer:
         assert(type(self._n_iter_doe) is int and self._n_iter_doe > 0)
         assert(type(self._n_cand) is int and self._n_cand >= self._n_worker)
         if type(self._n_iter) is int:
-            assert(self._n_iter > 0)
+            assert(self._n_iter >= 0)
         else:
             assert(self._n_iter is None), 'n_iter is either an integer or None.'
-        assert(type(self._n_restart) is int and self._n_restart > 0)
+        assert(type(self._n_cycle) is int and self._n_cycle >= 0)
         
         # create output directory, if not existent
         if not os.path.isdir(self._out_dir):
@@ -141,9 +142,9 @@ class Optimizer:
         if not self._resume:
             np.random.seed(self._seed) # set random seed.
             self.i_iter = 0 # iteration index (how many iterations have been run)
-            self.i_restart = 0 # restart index (how many restarts have been initiated)
+            self.i_cycle = 0 # number of optimization cycles that have been completed
             self.doe_samp = self.doe() # DOE samples
-            self.i_iter_doe = 0 # iteration index during DOE phase (how many DOE iterations have been run in current restart cycle)
+            self.i_iter_doe = 0 # iteration index during DOE phase (how many DOE iterations have been run in current cycle)
             self.t_build_arr = np.zeros(0) # time of building a RBF model for each iteration. If an iteration is DOE, = 0.  
             self.t_srs_arr = np.zeros(0) # time of running SRS method for each iteration. If an iteration is DOE, = 0. 
             self.t_prop_arr = np.zeros(0) # time of proposing new points for each iteration.
@@ -167,17 +168,53 @@ class Optimizer:
             self.load_state()
         
     
-    def __str__(self, verbose_level=1):
+    def show(self, select=['problem', 'config', 'state', 'result']):
         """
-        Display optimizer status.
+        Display the optimizer info.
         
         Args:
             
-            verbose_level (int, optional): Verbose level. The larger `verbose` is,
-                the more detailed information will be displayed.
+            - select (list or tuple, optional): Select which info will be displayed.
+                Possible values and their meanings:
+                    'problem': optimization problem to be solved.
+                    'config': optimization configuration.
+                    'state': optimizer state.
+                    'result': optimization results.
         """
-    
-    def run(self, std_out_file=None, std_err_file=None, verbose=True):
+        assert(type(select) in [list, tuple])
+        
+        if 'problem' in select:
+            print(self._prob)
+            
+        if 'config' in select:
+            print('Optimization configuration:')
+            print('- Number of workers: %d' % self._n_worker)
+            if self._n_iter is None:
+                print('- Termination criterion: stop after completing %d optimization cycles' % self._n_cycle)
+            else:
+                print('- Termination criterion: stop after completing %d iterations' % self._n_iter)
+            is_resume = 'Yes' if self._resume else 'No'
+            print('- Resuming from the last run?  %s' % is_resume)
+            print("- Output directory: '%s'" % self._out_dir)
+            
+        if 'state' in select:
+            print('Optimizer state:')
+            print('- Number of iterations completed: %d' % self.i_iter)
+            print('- Number of cycles completed: %d' % self.i_cycle)
+            print('- Zoom level of current node: %d' % self.zoom_lv) # note: zoom level of root node is zero
+            node_domain = self.tree[self.zoom_lv][self.act_node_ix]['domain']
+            print('- Domain of current node: %s' % ('{'+', '.join(["'%s': %s" % (x, str(tuple(v))) for x, v in \
+                                                                   zip(self._prob.x_var, node_domain)])+'}'))
+
+        if 'result' in select:
+            print('Optimization result:')
+            print('- Best point:')
+            print('  '+', '.join(['%s = %g' % (x, v) for x, v in zip(self._prob.x_var, self.best_x)]))
+            print('- Best (noisy) value:')
+            print('  %s = %g' % (self._prob.y_var, self.best_y))
+        
+
+    def run(self, std_out_file=None, std_err_file=None, verbosity=1):
         """
         Run ProSRS algorithm.
         
@@ -191,9 +228,11 @@ class Optimizer:
                 If ``str``, then standard errors will be directed to the file `std_err_file`.
                 If None, then standard errors will not be saved to a file.
                 
-            verbose (bool, optional): Whether to verbose while running the algorithm.     
-        """ 
-        # FIXME: check verbose           
+            verbosity (int, optional): Level of verbosity while running the algorithm. 
+                If zero, then no verbose. The larger this value is, the more information
+                will be displayed.
+        """  
+        assert(verbosity >= 0)        
         # log standard outputs and standard errors.
         # here we write to a new file if we do not resume. Otherwise, we append to the old file.
         if std_out_file is not None:
@@ -209,19 +248,29 @@ class Optimizer:
                     os.remove(std_err_file)
             sys.stderr = std_err_logger(std_err_file)
         
+        if verbosity == 2:
+            self.show(select=['problem']) # show optimization problem
+            print
+            self.show(select=['config']) # show optimization configuration
+        
+        if verbosity > 0:
+            print('\nStart running ProSRS algorithm ...')
+            
         # main loop
         while not self.is_done():
             
-            if verbose:
-                print('\nIteration = %d' % (self.i_iter+1))
+            if verbosity > 0:
+                print('\nIteration %d:' % (self.i_iter+1))
                 
             # propose new points
-            new_pt = self.propose(verbose=verbose)        
+            new_pt = self.propose(verbose=verbosity>0)        
             # evaluate proposed points
-            new_val = self.eval_pt(new_pt, verbose=verbose)
-                
+            new_val = self.eval_pt(new_pt, verbose=verbosity>0)
             # update optimizer state with the new evaluations
-            self.update(new_pt, new_val, verbose=verbose)
+            self.update(new_pt, new_val, verbose=verbosity>0)
+            
+            if verbosity == 2:
+                self.show(select=['state']) # show optimizer state
             
             # flush standard outputs and standard errors to files
             if std_out_file is not None:
@@ -231,6 +280,13 @@ class Optimizer:
                 sys.stderr.terminal.flush()
                 sys.stderr.log.flush()
         
+        if verbosity > 0:
+            print('\nFinished running ProSRS algorithm.')
+            
+        if verbosity == 2:
+            print
+            self.show(select=['result']) # show optimization result
+            
         # reset stdout and stderr
         if std_out_file is not None:
             sys.stdout = orig_std_out 
@@ -305,10 +361,14 @@ class Optimizer:
             
             new_pt (2d array): Proposed new points. Each row is one point.
         """
-        # FIXME: check verbose
         tt1 = default_timer()
         
         if self.i_iter_doe < self._n_iter_doe:
+            
+            if verbose:
+                sys.stdout.write('Proposing new points (DOE) '+'.'*self._verbose_dot_len)
+            t1 = default_timer()
+            
             # i.e., current iteration is in DOE phase
             new_pt = self.doe_samp[self.i_iter_doe*self._n_worker:(self.i_iter_doe+1)*self._n_worker]
             # the following variables will be saved in the `self.update` method
@@ -316,6 +376,11 @@ class Optimizer:
             self.gSRS_pct = np.nan
             self.t_build = 0.
             self.t_srs = 0.
+            
+            t2 = default_timer()
+            if verbose:
+                sys.stdout.write(' Done (time took: %.2e sec).\n' % (t2-t1))
+                
         else:
             # i.e., current iteration is in true optimization phase
             
@@ -332,22 +397,27 @@ class Optimizer:
             self.sigma = self._init_sigma*0.5**self.n_reduce_sigma
             
             ########### Build RBF surrogate model ##############
+            
+            if verbose:
+                sys.stdout.write('Building RBF regression model '+'.'*self._verbose_dot_len)
                 
             t1 = default_timer()
-            
-            # FIXME: we may not need `opt_sm` eventually
-            self.rbf_mod, opt_sm, _, _ = RBF_reg(self.x_node, self.y_node, self._lambda_range,
-                                                 normalize_data=self._normalize_data, wgt_expon=self.gamma,
-                                                 n_fold=self._n_fold, kernel=self._rbf_kernel, 
-                                                 poly_deg=self._rbf_poly_deg, pool=self._pool_rbf)                
+
+            self.rbf_mod, _, _, _ = RBF_reg(self.x_node, self.y_node, self._lambda_range,
+                                            normalize_data=self._normalize_data, wgt_expon=self.gamma,
+                                            n_fold=self._n_fold, kernel=self._rbf_kernel, 
+                                            poly_deg=self._rbf_poly_deg, pool=self._pool_rbf)                
             t2 = default_timer()
             self.t_build = t2-t1
             
             if verbose:
-                print('time to build RBF surrogate = %.2e sec' % self.t_build)
+                sys.stdout.write(' Done (time took: %.2e sec).\n' % self.t_build)
             
             ########### Propose new points using SRS method ############## 
             
+            if verbose:
+                sys.stdout.write('Proposing new points '+'.'*self._verbose_dot_len)
+                
             t1 = default_timer()
             
             new_pt = self.SRS()
@@ -356,23 +426,10 @@ class Optimizer:
             self.t_srs = t2-t1
             
             if verbose:
-                print('act_node_ix = %d' % self.act_node_ix)
-                print('gamma = %g' % self.gamma)
-                print('opt_sm = %.1e' % opt_sm)
-                print('gSRS_pct = %g' % self.gSRS_pct)
-                print('n_fail = %d' % self.n_fail)
-                print('n_reduce_sigma = %d' % self.n_reduce_sigma)
-                print('sigma = %g' % self.sigma)
-                print('zoom_out_prob = %g' % self.act_node['beta'])
-                print('zoom_lv = %d' % self.zoom_lv)
-                print('node_domain =')
-                print(self.act_node['domain'])
+                sys.stdout.write(' Done (time took: %.2e sec).\n' % self.t_srs)
                     
         tt2 = default_timer()
         self.t_prop = tt2-tt1
-        
-        if verbose:
-            print('time to propose new points = %.2e sec' % self.t_prop)
         
         return new_pt
         
@@ -470,8 +527,9 @@ class Optimizer:
             
             y (1d array): Evaluations of points in `x`.
         """
-        # FIXME: check verbose
-        
+        if verbose:
+            sys.stdout.write('Evaluating proposed points '+'.'*self._verbose_dot_len)
+            
         t1 = default_timer()
         
         self.eval_seeds = self._seed+1+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
@@ -482,7 +540,7 @@ class Optimizer:
         self.t_eval = t2-t1
         
         if verbose:
-            print('time to evaluate points = %.2e sec' % self.t_eval)
+            sys.stdout.write(' Done (time took: %.2e sec).\n' % self.t_eval)
         
         return y
     
@@ -499,7 +557,9 @@ class Optimizer:
             
             verbose (bool, optional): Whether to verbose about updating the state of the optimizer.
         """
-        # FIXME: check verbose        
+        if verbose:
+            sys.stdout.write('Updating optimizer state '+'.'*self._verbose_dot_len)
+            specific_msg = '' # specific message indicating the action
         t1 = default_timer()
         
         self.i_iter += 1
@@ -585,13 +645,10 @@ class Optimizer:
                 if np.all(blen*child_npt**(-1./self._dim) < (self._prob.domain_ub-self._prob.domain_lb)*self._resol): # resolution condition
                     # then we restart
                     if verbose:
-                        print('Restart for the next iteration!')
+                        specific_msg += 'Restart for the next iteration!\n'
                     self.i_iter_doe = 0
-                    
-                    # FIXME: debugging only (to recover the original, uncomment the following)
-#                    self.doe_samp = self.doe()
-                    
-                    self.i_restart += 1
+                    self.doe_samp = self.doe()
+                    self.i_cycle += 1
                     self.zoom_lv = 0
                     self.act_node_ix = 0
                     self.x_tree = np.zeros((0, self._dim))
@@ -610,14 +667,14 @@ class Optimizer:
                             self.act_node_ix = len(self.tree[self.zoom_lv])
                             self.tree[self.zoom_lv].append(child_node)    
                         if verbose:
-                            print('Zoom in (create a new child node)!')       
+                            specific_msg += 'Zoom in (created a new child node)!\n'    
                     else:
                         # then activate existing child node
                         self.act_node_ix = child_node_ix
                         # reduce zoom-out probability
                         child_node['beta'] = max(self._min_beta, child_node['beta']/2.)
                         if verbose:
-                            print('Zoom in (activate an existing child node)!')
+                            specific_msg += 'Zoom in (activated an existing child node)!\n'
             
             if self._n_worker > 1 or (self._n_worker == 1 and self.srs_wgt_pat[0] == self._wgt_pat_bd[0]):
                 if np.random.uniform() < self.tree[self.zoom_lv][self.act_node_ix]['beta'] and self.zoom_lv > 0 and self.i_iter_doe >= self._n_iter_doe:
@@ -629,19 +686,13 @@ class Optimizer:
                     # check that the node after zooming out will contain the current node
                     assert(domain_intersect(self.tree[self.zoom_lv][self.act_node_ix]['domain'], child_node['domain']) == child_node['domain'])
                     if verbose:
-                        print('Zoom out!')
-                
-                # FIXME: debugging only (remove the following to recover the original)
-                elif self.i_iter_doe == 0:
-                    self.doe_samp = self.doe()
-                    
-                    
-        
+                        specific_msg += 'Zoom out!\n'
+                        
         t2 = default_timer()
         t_update = t2-t1
         self.t_update_arr = np.append(self.t_update_arr, t_update)
         if verbose:
-            print('time to update optimizer = %.2e sec' % t_update)
+            sys.stdout.write(' Done (time took: %.2e sec).\n' % t_update+specific_msg)
             
         self.save_state()
    
@@ -655,8 +706,8 @@ class Optimizer:
             done (bool): Indicator.
         """
         if self._n_iter is None:
-            assert(self.i_restart <= self._n_restart+1)
-            done = self.i_restart > self._n_restart
+            assert(self.i_cycle <= self._n_cycle)
+            done = self.i_cycle == self._n_cycle
         else:
             assert(self.i_iter <= self._n_iter)
             done = self.i_iter == self._n_iter
@@ -708,7 +759,7 @@ class Optimizer:
         # save state to npz file
         np.savez(self._state_npz_temp_file,
                  # constant parameters
-                 _dim=self._dim, _n_worker=self._n_worker, _n_iter=self._n_iter, _n_restart=self._n_restart, 
+                 _dim=self._dim, _n_worker=self._n_worker, _n_iter=self._n_iter, _n_cycle = self._n_cycle,
                  _resume=self._resume, _seed=self._seed, _parallel_training=self._parallel_training, _out_dir=self._out_dir, 
                  _n_cand_fact=self._n_cand_fact, _wgt_pat_bd=self._wgt_pat_bd, _normalize_data=self._normalize_data,
                  _init_gamma=self._init_gamma, _delta_gamma=self._delta_gamma, _init_sigma=self._init_sigma, 
@@ -719,9 +770,9 @@ class Optimizer:
                  _n_doe_samp=self._n_doe_samp, _n_cand=self._n_cand, _state_npz_file=self._state_npz_file,
                  _state_pkl_file=self._state_pkl_file, _state_npz_lock_file=self._state_npz_lock_file,
                  _state_pkl_lock_file=self._state_pkl_lock_file, _state_npz_temp_file=self._state_npz_temp_file,
-                 _state_pkl_temp_file=self._state_pkl_temp_file,
+                 _state_pkl_temp_file=self._state_pkl_temp_file, _verbose_dot_len=self._verbose_dot_len,
                  # state variables
-                 i_iter=self.i_iter, i_restart=self.i_restart, doe_samp=self.doe_samp, i_iter_doe=self.i_iter_doe,
+                 i_iter=self.i_iter, i_cycle=self.i_cycle, doe_samp=self.doe_samp, i_iter_doe=self.i_iter_doe,
                  t_build_arr=self.t_build_arr, t_srs_arr=self.t_srs_arr, t_prop_arr=self.t_prop_arr,
                  t_eval_arr=self.t_eval_arr, t_update_arr=self.t_update_arr, gSRS_pct_arr=self.gSRS_pct_arr,
                  zoom_lv_arr=self.zoom_lv_arr, x_tree=self.x_tree, y_tree=self.y_tree, x_all=self.x_all,
@@ -758,7 +809,7 @@ class Optimizer:
                and self._n_cand==data['_n_cand']), 'To resume, experiment condition needs to be consistent with that of the last run.'
         # read state variables
         self.i_iter = data['i_iter'].item(0)
-        self.i_restart = data['self.i_restart'].item(0)
+        self.i_cycle = data['self.i_cycle'].item(0)
         self.doe_samp = data['doe_samp']
         self.i_iter_doe = data['i_iter_doe'].item(0)
         self.t_build_arr = data['t_build_arr']
