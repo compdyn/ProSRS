@@ -112,7 +112,6 @@ class Optimizer:
         self._state_pkl_temp_file = os.path.join(self._out_dir, STATE_PKL_TEMP_FILE_TEMP % self._prob.name) # a temporary file that holds data for `self._state_pkl_file`.
         
         # sanity check
-        # TODO: check the type of `self._prob`
         assert(type(self._n_worker) is int and self._n_worker > 0)
         assert(0 <= self._wgt_pat_bd[0] <= self._wgt_pat_bd[1] <= 1 and len(self._wgt_pat_bd) == 2)
         assert(self._delta_gamma >= 0)
@@ -141,7 +140,6 @@ class Optimizer:
         # initialize the state of the optimizer
         if not self._resume:
             np.random.seed(self._seed) # set random seed.
-            self.random_state = np.random.get_state() # FIXME: check necessity of passing random state within the class.
             self.i_iter = 0 # iteration index (how many iterations have been run)
             self.i_restart = 0 # restart index (how many restarts have been initiated)
             self.doe_samp = self.doe() # DOE samples
@@ -221,6 +219,7 @@ class Optimizer:
             new_pt = self.propose(verbose=verbose)        
             # evaluate proposed points
             new_val = self.eval_pt(new_pt, verbose=verbose)
+                
             # update optimizer state with the new evaluations
             self.update(new_pt, new_val, verbose=verbose)
             
@@ -252,15 +251,10 @@ class Optimizer:
             
             samp (2d array): LHS samples. Each row is one sample.
         """
-        np.random.set_state(self.random_state)
-        
         unit_X = lhs(self._dim, samples=self._n_doe_samp, criterion=criterion) # unit_X: 2d array in unit cube
         samp = np.zeros_like(unit_X)
         for i in range(self._dim):
             samp[:, i] = unit_X[:, i]*(self._prob.domain[i][1]-self._prob.domain[i][0])+self._prob.domain[i][0] # scale and shift
-        
-        self.random_state = np.random.get_state()
-        
         return samp
     
     
@@ -312,8 +306,6 @@ class Optimizer:
             new_pt (2d array): Proposed new points. Each row is one point.
         """
         # FIXME: check verbose
-        np.random.set_state(self.random_state)
-        
         tt1 = default_timer()
         
         if self.i_iter_doe < self._n_iter_doe:
@@ -353,7 +345,7 @@ class Optimizer:
             
             if verbose:
                 print('time to build RBF surrogate = %.2e sec' % self.t_build)
-                
+            
             ########### Propose new points using SRS method ############## 
             
             t1 = default_timer()
@@ -375,14 +367,12 @@ class Optimizer:
                 print('zoom_lv = %d' % self.zoom_lv)
                 print('node_domain =')
                 print(self.act_node['domain'])
-            
+                    
         tt2 = default_timer()
         self.t_prop = tt2-tt1
         
         if verbose:
             print('time to propose new points = %.2e sec' % self.t_prop)
-            
-        self.random_state = np.random.get_state()
         
         return new_pt
         
@@ -394,15 +384,13 @@ class Optimizer:
         Returns:
             
             new_pt (2d array): Proposed points.
-        """
-        np.random.set_state(self.random_state)
-        
+        """ 
         # generate candidate points
         if self.gSRS_pct == 1:            
             # generate candidate points uniformly (global SRS)
             cand_pt = np.zeros((self._n_cand, self._dim))
             for d, bd in enumerate(self.act_node['domain']):
-                cand_pt[:, d] = np.random.uniform(low=bd[0], high=bd[1], size=self._n_cand)
+                cand_pt[:, d] = np.random.uniform(low=bd[0], high=bd[1], size=self._n_cand)        
         else:
             n_cand_gSRS = int(np.round(self._n_cand*self.gSRS_pct)) # number of candidate points for global SRS
             n_cand_lSRS = self._n_cand-n_cand_gSRS # number of candidate points for local SRS
@@ -425,7 +413,7 @@ class Optimizer:
             # combine two types of candidate points
             comb_cand_pt = np.vstack((cand_pt_gSRS, cand_pt_lSRS))
             # put candidate points back to the domain, if there's any outside
-            uniq_cand_pt, raw_cand_pt = put_back_box(comb_cand_pt, self.act_node['domain'])
+            uniq_cand_pt, raw_cand_pt = put_back_box(comb_cand_pt, self.act_node['domain'])            
             # get candidate points (``len(uniq_cand_pt) < n_worker`` is pathological case, almost never encountered in practice)
             cand_pt = uniq_cand_pt if len(uniq_cand_pt) >= self._n_worker else raw_cand_pt
         
@@ -459,13 +447,11 @@ class Optimizer:
             min_ix = np.argmin(cand_score)
             new_pt[j] = cand_pt[min_ix]           
             # update variables
-            refer_pt = np.vstack((refer_pt, new_pt[j].reshape(1, -1)))
+            refer_pt = np.vstack((refer_pt, new_pt[j].reshape((1, -1))))
             dist_cand = np.delete(dist_cand, min_ix)
             resp_score = np.delete(resp_score, min_ix)
             cand_pt = np.delete(cand_pt, min_ix, axis=0)
             n_cand -= 1
-            
-        self.random_state = np.random.get_state()
         
         return new_pt
         
@@ -485,7 +471,6 @@ class Optimizer:
             y (1d array): Evaluations of points in `x`.
         """
         # FIXME: check verbose
-        np.random.set_state(self.random_state)
         
         t1 = default_timer()
         
@@ -498,8 +483,6 @@ class Optimizer:
         
         if verbose:
             print('time to evaluate points = %.2e sec' % self.t_eval)
-            
-        self.random_state = np.random.get_state()
         
         return y
     
@@ -516,9 +499,7 @@ class Optimizer:
             
             verbose (bool, optional): Whether to verbose about updating the state of the optimizer.
         """
-        # FIXME: check verbose
-        np.random.set_state(self.random_state)
-        
+        # FIXME: check verbose        
         t1 = default_timer()
         
         self.i_iter += 1
@@ -606,7 +587,10 @@ class Optimizer:
                     if verbose:
                         print('Restart for the next iteration!')
                     self.i_iter_doe = 0
-                    self.doe_samp = self.doe()
+                    
+                    # FIXME: debugging only (to recover the original, uncomment the following)
+#                    self.doe_samp = self.doe()
+                    
                     self.i_restart += 1
                     self.zoom_lv = 0
                     self.act_node_ix = 0
@@ -646,6 +630,12 @@ class Optimizer:
                     assert(domain_intersect(self.tree[self.zoom_lv][self.act_node_ix]['domain'], child_node['domain']) == child_node['domain'])
                     if verbose:
                         print('Zoom out!')
+                
+                # FIXME: debugging only (remove the following to recover the original)
+                elif self.i_iter_doe == 0:
+                    self.doe_samp = self.doe()
+                    
+                    
         
         t2 = default_timer()
         t_update = t2-t1
@@ -653,7 +643,6 @@ class Optimizer:
         if verbose:
             print('time to update optimizer = %.2e sec' % t_update)
             
-        self.random_state = np.random.get_state()
         self.save_state()
    
      
@@ -712,7 +701,7 @@ class Optimizer:
         """
         # save state to pickle file
         with open(self._state_pkl_temp_file, 'wb') as f:
-            pickle.dump(self.random_state, f) # first save to temporary file, preventing data loss due to termination during execution of `pickl.dump`
+            pickle.dump(np.random.get_state(), f) # first save to temporary file, preventing data loss due to termination during execution of `pickl.dump`
         shutil.copy2(self._state_pkl_temp_file, self._state_pkl_file) # create a new or overwrite the old `self._state_pkl_file`
         os.remove(self._state_pkl_temp_file) # remove temporary file
         
@@ -751,8 +740,7 @@ class Optimizer:
         if os.path.isfile(self._state_pkl_lock_file):
             os.remove(self._state_pkl_lock_file) # remove lock file, if there's any
         with open(self._state_pkl_file, 'rb') as f:
-            self.random_state = pickle.load(f)
-            
+            np.random.set_state(pickle.load(f))    
         # load state data from npz file
         if os.path.isfile(self._state_npz_lock_file):
             os.remove(self._state_npz_lock_file) # remove lock file, if there's any

@@ -999,7 +999,7 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
                     n_reduce_step_size: int
                     wgt_pat_arr: weight pattern array, 1d array
                     fit_bd: list of tuples
-                    X_samp: 2d array
+                    X_samp: 2d array    
                 Output:
                     prop_pt_arr: 2d array
                 '''
@@ -1054,7 +1054,7 @@ def run(prob, n_iter, n_proc, n_core_node, comm, outdir, init_iter=None, seed=1,
                     else:
                         # this rarely happens, then we use raw candidate point (possibly with duplicate points)
                         prop_pt_arr = SRS(rbf_mod,cand_pt_raw,X_samp,wgt_pat_arr)
-                    
+                
                 return prop_pt_arr
             
             ########################### Main program ############################

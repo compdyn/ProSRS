@@ -95,7 +95,7 @@ class goldstein:
     '''
     def __init__(self,bounds=None,sd=0.):
         self.input_dim = 2
-        self.bounds = [(-2,2),(-2,2)] if bounds is None else bounds
+        self.bounds = [(-2.,2.),(-2.,2.)] if bounds is None else bounds
         self.min = [(0.,-1.)]
         self.fmin = 3.
         self.sd = sd

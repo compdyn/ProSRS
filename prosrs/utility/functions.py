@@ -134,12 +134,12 @@ def unique_row(array):
     
     if array.size > 0: # i.e. non-empty        
         
-        sorted_arr =  array[np.lexsort(array.T),:]
+        sorted_arr = array[np.lexsort(array.T), :]
         # get unique rows
         row_ix = np.append([True], np.any(np.diff(sorted_arr, axis=0), axis=1))
         unique_arr = sorted_arr[row_ix]
     else:
-        unique_arr = array
+        unique_arr = array.copy()
         
     return unique_arr
 
@@ -171,9 +171,9 @@ def put_back_box(pt, domain):
         max_bd = domain[j][1]
         assert(max_bd > min_bd)
         if j == 0:
-            ind = np.logical_and(pt[:, j] > min_bd,pt[:, j] < max_bd) # indicator that shows if a number is inside the range
+            ind = np.logical_and(pt[:, j] > min_bd, pt[:, j] < max_bd) # indicator that shows if a number is inside the range
         else:
-            ind = np.logical_or(ind, np.logical_and(pt[:, j] > min_bd,pt[:, j] < max_bd))
+            ind = np.logical_or(ind, np.logical_and(pt[:, j] > min_bd, pt[:, j] < max_bd))
         pt[:, j] = np.maximum(min_bd, np.minimum(max_bd, pt[:, j]))       
     pt_1 = pt[ind]
     pt_2 = pt[np.logical_not(ind)]
