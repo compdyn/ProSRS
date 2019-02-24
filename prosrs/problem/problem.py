@@ -25,7 +25,7 @@ class Problem:
         
         Args:
             
-            func (callable): Function to be optimized over, for which ithe nput is 1d array,
+            func (callable): Function to be optimized over, for which the input is 1d array,
                 the output is a scalar. For example, ``func = lambda x: x[0]**2+x[1]**2``.
             
             domain (list of tuples): Optimization domain.
@@ -89,7 +89,7 @@ class Problem:
         else:
             line += '- Global minimum: unknown\n'
         if self.min_loc is not None:
-            line += '- Global minimum locations:%s' % ', '.join(["%s = %s" % (str(tuple(self.x_var)), str(tuple(v)))\
+            line += '- Global minimum locations: %s' % ', '.join(["%s = %s" % (str(tuple(self.x_var)), str(tuple(v)))\
                                                                    for v in self.min_loc])
         else:
             line += '- Global minimum locations: unknown'

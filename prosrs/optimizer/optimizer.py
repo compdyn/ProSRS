@@ -168,7 +168,7 @@ class Optimizer:
             self.load_state()
         
     
-    def show(self, select=['problem', 'config', 'state', 'result']):
+    def show(self, select=['problem', 'config', 'status', 'result']):
         """
         Display the optimizer info.
         
@@ -178,7 +178,7 @@ class Optimizer:
                 Possible values and their meanings:
                     'problem': optimization problem to be solved.
                     'config': optimization configuration.
-                    'state': optimizer state.
+                    'status': optimization status.
                     'result': optimization results.
         """
         assert(type(select) in [list, tuple])
@@ -197,8 +197,8 @@ class Optimizer:
             print('- Resuming from the last run?  %s' % is_resume)
             print("- Output directory: '%s'" % self._out_dir)
             
-        if 'state' in select:
-            print('Optimizer state:')
+        if 'status' in select:
+            print('Optimization status:')
             print('- Number of iterations completed: %d' % self.i_iter)
             print('- Number of cycles completed: %d' % self.i_cycle)
             print('- Zoom level of current node: %d' % self.zoom_lv) # note: zoom level of root node is zero
@@ -249,6 +249,7 @@ class Optimizer:
             sys.stderr = std_err_logger(std_err_file)
         
         if verbosity == 2:
+            print
             self.show(select=['problem']) # show optimization problem
             print
             self.show(select=['config']) # show optimization configuration
@@ -270,7 +271,7 @@ class Optimizer:
             self.update(new_pt, new_val, verbose=verbosity>0)
             
             if verbosity == 2:
-                self.show(select=['state']) # show optimizer state
+                self.show(select=['status']) # show optimization status
             
             # flush standard outputs and standard errors to files
             if std_out_file is not None:
@@ -809,7 +810,7 @@ class Optimizer:
                and self._n_cand==data['_n_cand']), 'To resume, experiment condition needs to be consistent with that of the last run.'
         # read state variables
         self.i_iter = data['i_iter'].item(0)
-        self.i_cycle = data['self.i_cycle'].item(0)
+        self.i_cycle = data['i_cycle'].item(0)
         self.doe_samp = data['doe_samp']
         self.i_iter_doe = data['i_iter_doe'].item(0)
         self.t_build_arr = data['t_build_arr']
@@ -829,7 +830,14 @@ class Optimizer:
         self.zoom_lv = data['zoom_lv'].item(0)
         self.act_node_ix = data['act_node_ix'].item(0)
         self.srs_wgt_pat = data['srs_wgt_pat']
-        self.tree = data['tree'].item(0)        
+        self.tree = data['tree'].item(0) 
+        # sanity check
+        if self._n_iter is None:
+            assert(self._n_cycle > self.i_cycle), 'In the last run, %d optimization cycles were completed. To resume, please set n_cycle greater than %d (n_cycle is %d currently).' \
+                % (self.i_cycle, self.i_cycle, self._n_cycle)
+        else:
+            assert(self._n_iter > self.i_iter), 'In the last run, %d iterations were completed. To resume, please set n_iter greater than %d (n_iter is %d currently).' \
+                % (self.i_iter, self.i_iter, self._n_iter)
             
         
     def visualize(self, fig_paths={'optim_curve': None, 'zoom_level': None, 'time': None}):
