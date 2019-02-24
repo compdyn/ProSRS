@@ -19,7 +19,7 @@ class Problem:
     An optimization problem class that works with ProSRS algorithm.
     """
     def __init__(self, func, domain, x_var=None, y_var='y', name='demo', true_func=None, 
-                 min_loc=None, min_true_func=None):
+                 min_loc=None, min_true_func=None, sd=None):
         """
         Constructor. 
         
@@ -51,6 +51,9 @@ class Problem:
             
             min_true_func (float or None, optional): Global minimum of function 
                 `true_func` on the `domain`. If None, then global minimum is unknown.
+            
+            sd (float or None, optional): Standard deviation of random noise in `func`.
+                If None, then standard deviation is unknown or not well-defined.
         
         Raises:
             
@@ -66,6 +69,7 @@ class Problem:
         self.F = true_func
         self.min_loc = min_loc
         self.min_true_func = min_true_func
+        self.sd = sd
         self.domain_lb, self.domain_ub = zip(*self.domain) # domain lower bounds and domain upper bounds
         self.domain_lb, self.domain_ub = np.array(self.domain_lb), np.array(self.domain_ub) # convert to 1d array
         # sanity check
@@ -73,7 +77,10 @@ class Problem:
             raise ValueError('Inconsistent dimension for x_var and domain.')
         if self.min_loc is not None:
             assert(self.min_loc.shape[1] == self.dim), 'Wrong shape for min_loc.'
+        if self.sd is not None:
+            assert(self.sd >= 0)
         assert(np.all(self.domain_lb < self.domain_ub))
+    
     
     def __str__(self):
         """
@@ -94,7 +101,8 @@ class Problem:
         else:
             line += '- Global minimum locations: unknown'
         return line
-            
+    
+        
     def visualize(self, true_func=False, n_samples=None, plot_2d='contour', 
                   contour_levels=100, min_marker_size=10, n_proc=1, fig_path=None):
         """

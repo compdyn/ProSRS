@@ -17,6 +17,7 @@ from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP, STATE_
 from ..utility.classes import std_out_logger, std_err_logger
 from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one, eff_npt, boxify, domain_intersect
 from .surrogate import RBF_reg
+import matplotlib.pyplot as plt
 
 
 class Optimizer:
@@ -162,26 +163,34 @@ class Optimizer:
             self.zoom_lv = 0 # zoom level (zero-based).
             self.act_node_ix = 0 # index of the activate node for the zoom level `self.zoom_lv` (zero-based).
             self.srs_wgt_pat = np.linspace(self._wgt_pat_bd[0], self._wgt_pat_bd[1], self._n_worker) # weight pattern in the SRS method.
-            self.tree = self.init_tree() # initialize optimization tree    
+            self.tree = self.init_tree() # initialize optimization tree
+            self.i_iter_posterior_eval = np.nan # number of completed iterations upon running posterior evaluation
+            self.posterior_eval_x = np.zeros((0, self._dim)) # evaluated points in the posterior Monte Carlo runs.
+            self.posterior_eval_y = np.zeros((0, 0)) # (noisy) y values of `self.posterior_eval_x` (each row: Monte Carlo evaluations of one point).
         else:
             # load optimizer state from the last run
             self.load_state()
         
     
-    def show(self, select=['problem', 'config', 'status', 'result']):
+    def show(self, select=['problem', 'config', 'status', 'result', 'post_eval'], n_display=10):
         """
         Display the optimizer info.
         
         Args:
             
-            - select (list or tuple, optional): Select which info will be displayed.
+            select (list or tuple, optional): Select which info will be displayed.
                 Possible values and their meanings:
                     'problem': optimization problem to be solved.
                     'config': optimization configuration.
                     'status': optimization status.
                     'result': optimization results.
+                    'post_eval': posterior evaluation results.
+                    
+            n_display (int, optional): Number of (top) points to be displayed for posterior evaluations.
+                This parameter takes effects only when `select` contains 'post_eval'. 
         """
-        assert(type(select) in [list, tuple])
+        select_possible_vals = ['problem', 'config', 'status', 'result', 'post_eval']
+        assert(type(select) in [list, tuple] and set(select)<=set(select_possible_vals)), 'invalid select value'
         
         if 'problem' in select:
             print(self._prob)
@@ -212,6 +221,55 @@ class Optimizer:
             print('  '+', '.join(['%s = %g' % (x, v) for x, v in zip(self._prob.x_var, self.best_x)]))
             print('- Best (noisy) value:')
             print('  %s = %g' % (self._prob.y_var, self.best_y))
+        
+        if 'post_eval' in select:
+            n_pt = len(self.posterior_eval_x) # number of points evaluated in posterior runs
+            if n_pt == 0:
+                warnings.warn("No posterior evaluation results can be displayed. Please run 'posterior_eval()' method first.")
+            else:
+                assert(len(self.posterior_eval_y) == n_pt and type(self.i_iter_posterior_eval) is int)
+                assert(type(n_display) is int and n_display > 0)
+                n_repeat = self.posterior_eval_y.shape[1] # number of Monte Carlo repeats
+                posterior_mean = np.mean(self.posterior_eval_y, axis=1)
+                posterior_std = np.std(self.posterior_eval_y, axis=1, ddof=1)
+                # get (sorted) top points based on posterior mean values
+                if n_display > n_pt:
+                    warnings.warn('Number of points in posterior evaluations is %d, less than n_display (%d). Reset n_display = %d.'
+                                  % (n_pt, n_display, n_pt))
+                    n_display = n_pt
+                sort_ix = np.argsort(posterior_mean)
+                display_x = self.posterior_eval_x[sort_ix][:n_display]
+                display_mean_y = posterior_mean[sort_ix][:n_display]
+                display_std_y = posterior_std[sort_ix][:n_display]
+                # format into strings
+                x_var_str = []
+                display_x_str = []
+                for j in range(self._dim):
+                    var_len = len(self._prob.x_var[j])
+                    x_str_list = ['%g' % x for x in display_x[:, j]]
+                    str_len = max(var_len, max([len(x) for x in x_str_list]))
+                    x_var_str.append(' '*(str_len-var_len)+self._prob.x_var[j]) # pad space at front
+                    display_x_str.append([' '*(str_len-len(x))+x for x in x_str_list]) # pad space at front
+                display_x_str = [[x[j] for x in display_x_str] for j in range(n_display)]
+                y_str_list = ['%g' % x for x in display_mean_y]
+                y_var = 'mean of '+self._prob.y_var
+                str_len = max(len(y_var), max([len(x) for x in y_str_list]))
+                y_var_str = ' '*(str_len-len(y_var))+y_var # pad space at front
+                display_y_str = [' '*(str_len-len(x))+x for x in y_str_list] # pad space at front
+                y_err_str_list = ['%g' % x for x in display_std_y]
+                y_err_var = 'std of '+self._prob.y_var
+                str_len = max(len(y_err_var), max([len(x) for x in y_err_str_list]))
+                y_err_var_str = ' '*(str_len-len(y_err_var))+y_err_var # pad space at front
+                display_y_err_str = [' '*(str_len-len(x))+x for x in y_err_str_list] # pad space at front
+                # display
+                print('Posterior evaluation results:')
+                print('- Condition: run ProSRS algorithm for %d iterations, then run posterior evaluations with %d Monte Carlo repeats'
+                      % (self.i_iter_posterior_eval, n_repeat))
+                print('- Top %d points based on Monte Carlo mean estimates:' % n_display)
+                space = ' '*3
+                print(space.join(x_var_str+[y_var_str, y_err_var_str]))
+                for x, mean_y, std_y in zip(display_x_str, display_y_str, display_y_err_str):
+                    print(space.join(x+[mean_y, std_y]))
         
 
     def run(self, std_out_file=None, std_err_file=None, verbosity=1):
@@ -375,8 +433,8 @@ class Optimizer:
             # the following variables will be saved in the `self.update` method
             # so we need to set them appropriately
             self.gSRS_pct = np.nan
-            self.t_build = 0.
-            self.t_srs = 0.
+            self.t_build = np.nan
+            self.t_srs = np.nan
             
             t2 = default_timer()
             if verbose:
@@ -778,7 +836,9 @@ class Optimizer:
                  t_eval_arr=self.t_eval_arr, t_update_arr=self.t_update_arr, gSRS_pct_arr=self.gSRS_pct_arr,
                  zoom_lv_arr=self.zoom_lv_arr, x_tree=self.x_tree, y_tree=self.y_tree, x_all=self.x_all,
                  y_all=self.y_all, seed_all=self.seed_all, best_x=self.best_x, best_y=self.best_y, 
-                 zoom_lv=self.zoom_lv, act_node_ix=self.act_node_ix, srs_wgt_pat=self.srs_wgt_pat, tree=self.tree)
+                 zoom_lv=self.zoom_lv, act_node_ix=self.act_node_ix, srs_wgt_pat=self.srs_wgt_pat, tree=self.tree,
+                 posterior_eval_x=self.posterior_eval_x, posterior_eval_y=self.posterior_eval_y,
+                 i_iter_posterior_eval=self.i_iter_posterior_eval)
         
         shutil.copy2(self._state_npz_temp_file, self._state_npz_file)
         os.remove(self._state_npz_temp_file) # remove temporary file
@@ -830,7 +890,10 @@ class Optimizer:
         self.zoom_lv = data['zoom_lv'].item(0)
         self.act_node_ix = data['act_node_ix'].item(0)
         self.srs_wgt_pat = data['srs_wgt_pat']
-        self.tree = data['tree'].item(0) 
+        self.tree = data['tree'].item(0)
+        self.i_iter_posterior_eval = data['i_iter_posterior_eval'].item(0)
+        self.posterior_eval_x = data['posterior_eval_x']
+        self.posterior_eval_y = data['posterior_eval_y']
         # sanity check
         if self._n_iter is None:
             assert(self._n_cycle > self.i_cycle), 'In the last run, %d optimization cycles were completed. To resume, please set n_cycle greater than %d (n_cycle is %d currently).' \
@@ -840,20 +903,83 @@ class Optimizer:
                 % (self.i_iter, self.i_iter, self._n_iter)
             
         
-    def visualize(self, fig_paths={'optim_curve': None, 'zoom_level': None, 'time': None}):
+    def visualize(self, select=['optim_curve', 'zoom_level', 'time'], save_file=None):
         """
         Visualize optimization progress.
         
         Args:
             
-            fig_paths (dict, optional): Paths where the plots will be saved.
-                The keys of `fig_paths` are the types of plots. The values
-                of the keys are paths to be saved. If the value of a key is None 
-                or the key does not exist, a plot will be shown but no figure 
-                will be saved for the plot. If the value of a key is specified,
-                then a plot will be shown, and will be saved to this key value.
+            select (list or tuple, optional): Select which plot(s) to show.
+                Possible values and their meanings:
+                    'optim_curve': optimization curve (value of best point vs. iteration)
+                    'zoom_level': Zoom level plot (zoom level vs. iteration)
+                    'time': Wall time of different components (time vs. iteration)
+                    
+            save_file (list or tuple or None, optional): File paths to save figures.
+                If ``list`` or ``tuple``, then it consists of file paths for each plot in `select`.
+                If None, then no figures will be saved.
         """
-        # TODO
+        select_possible_vals = ['optim_curve', 'zoom_level', 'time']
+        assert(type(select) in [list, tuple] and set(select)<=set(select_possible_vals)), 'invalid select value'
+        if save_file is not None:
+            assert(type(save_file) in [list, tuple] and len(save_file) == len(select)), 'invalid save_file value'
+            file_dict = {x:y for x, y in zip(select, save_file)}
+        else:
+            file_dict = {}
+        iterations = range(1, self.i_iter+1)
+        
+        if 'optim_curve' in select:
+            vals = self.y_all.reshape((self.i_iter, self._n_worker))
+            best_val_arr = np.zeros(self.i_iter)
+            for i, val in enumerate(vals):
+                if i == 0:
+                    best_val_arr[i] = np.amin(val)
+                else:
+                    best_val_arr[i] = min(best_val_arr[i-1], np.amin(val))
+            fig = plt.figure()
+            plt.plot(iterations, best_val_arr, 'b-', label='best (noisy) value')
+            if self._prob.min_true_func is not None:
+                plt.plot(iterations, np.ones_like(iterations)*self._prob.min_true_func, '-', label='global min')
+                if self._prob.sd is not None:
+                    plt.plot(iterations, np.ones_like(iterations)*(self._prob.min_true_func+self._prob.sd), 
+                             '--', label='1 std of noise')
+                plt.legend(loc='best', framealpha=0.5)
+            plt.grid(True)
+            plt.xlabel('Iteration')
+            plt.ylabel('Function value')
+            plt.title('Optimization curve (problem: %s)' % self._prob.name)
+            plt.show()
+            if 'optim_curve' in file_dict: 
+                fig.savefig(file_dict['optim_curve'])
+                
+        if 'zoom_level' in select:
+            fig = plt.figure()
+            plt.plot(iterations, self.zoom_lv_arr, 'b-')
+            plt.grid(True)
+            plt.xlabel('Iteration')
+            plt.ylabel('Zoom level')
+            plt.ylim([-1, np.amax(self.zoom_lv_arr)+1])
+            plt.yticks(np.arange(np.amax(self.zoom_lv_arr)+1))
+            plt.title('Zoom level (problem: %s)' % self._prob.name)
+            plt.show()
+            if 'zoom_level' in file_dict:
+                fig.savefig(file_dict['zoom_level'])
+        
+        if 'time' in select:
+            fig = plt.figure()
+            plt.plot(iterations, self.t_build_arr, '-', label='build RBF')
+            plt.plot(iterations, self.t_srs_arr, '-', label='SRS')
+            plt.plot(iterations, self.t_eval_arr, '-', label='evaluation')
+            plt.plot(iterations, self.t_update_arr, '-', label='update')
+            plt.grid(True)
+            plt.xlabel('Iteration')
+            plt.ylabel('Wall time (sec)')
+            plt.yscale('log')
+            plt.legend(loc='best', framealpha=0.5)
+            plt.title('Computational cost (problem: %s)' % self._prob.name)
+            plt.show()
+            if 'time' in file_dict:
+                fig.savefig(file_dict['time'])
     
     
     def posterior_eval(self, n_top=0.1, n_repeat=10, n_worker=None, seed=1, seed_func=None, verbose=True):
@@ -885,50 +1011,42 @@ class Optimizer:
                 the reproducibility. Here we provide an option for users to specify their own routines.
             
             verbose (bool, optional): Whether to verbose about posterior evaluations.
-        
-        Returns:
-            
-            top_pt (2d array): Evaluated top points. 
-                Each row is one point.
-            
-            top_mean_val (1d array): Mean estimates of function values of `top_pt`.
-                In essense, these are estimates for the true expectation ``self._prob.F(top_pt)``.
-            
-            top_std_val (1d array): Standard deviation estimates of function values of top_pt`.
-                In essence, these are std estimates for the random noises in ``self._prob.f``
-                at `top_pt`.
-                
-            top_val (2d array): (Noisy) function values at `top_pt`. 
-                Each row is `n_repeat` Monte Carlo evaluations of one point
-                (i.e., ``top_eval.shape[1] = n_repeat``).
-        """
-        # FIXME: add verbose
+        """        
+        # sanity check
         assert(type(n_top) in [float, int])
         assert(type(n_repeat) is int and n_repeat > 0)
         assert(type(seed) is int and seed >= 0)
         n_all = len(self.x_all)
-        assert(n_all > 0), 'No points have been evaluated yet. Run the optimization algorithm first.'
+        assert(n_all > 0), 'No points have been evaluated yet. Run ProSRS algorithm first before running posterior evaluations.'
         if type(n_top) is float:
             assert(0 < n_top < 1)
             n_top = max(1, int(round(n_top*n_all)))
         else:
             assert(n_top > 0)
             if n_top > n_all:
-                warnings.warn('Specified n_top is larger than the number of evaluations. Reduce n_top to the number of evaluations.')
+                warnings.warn('Specified n_top is larger than total number of points (%d). Reset n_top = %d.' % (n_all, n_all))
                 n_top = n_all
         n_worker = self._n_worker if n_worker is None else n_worker
         assert(type(n_worker) is int and n_worker > 0)
-        # get top points and evaluate them
+        
+        t1 = default_timer()
+        if verbose:
+            sys.stdout.write('Running posterior evaluations (n_point = %d, n_repeat = %d) ' % (n_top, n_repeat)+'.'*self._verbose_dot_len)
+            
+        # evaluate top points
         sort_ix = np.argsort(self.y_all)  
         top_pt = self.x_all[sort_ix][:n_top]
         top_pt_mc = top_pt[np.outer(range(n_top), np.ones(n_repeat, dtype=int)).flatten()] # duplicate each point in `top_pt` for `n_repeat` times
         top_seed_mc = seed+np.arange(n_top*n_repeat, dtype=int)
         assert(len(top_pt_mc) == len(top_seed_mc))
-        top_val_mc = eval_func(self._prob.f, top_pt_mc, n_proc=n_worker, 
-                               seeds=top_seed_mc.tolist(), seed_func=seed_func)
+        top_val_mc = eval_func(self._prob.f, top_pt_mc, n_proc=n_worker, seeds=top_seed_mc.tolist(), seed_func=seed_func)
         top_val = top_val_mc.reshape((n_top, n_repeat))
-        top_mean_val = np.mean(top_val, axis=1)
-        top_std_val = np.std(top_val, axis=1, ddof=1)
+        # save results
+        self.i_iter_posterior_eval = self.i_iter
+        self.posterior_eval_x = top_pt
+        self.posterior_eval_y = top_val
         
-        return top_pt, top_mean_val, top_std_val, top_val
+        t2 = default_timer()
+        if verbose:
+            sys.stdout.write(' Done (time took: %.2e sec).\n' % (t2-t1))
         
