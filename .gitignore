@@ -1,6 +1,4 @@
-src/__pycache__
 *.pyc
-result/
 test/
-benchmark/surrogate_compare_result/
 .*
+examples/out
