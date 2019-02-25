@@ -19,7 +19,7 @@ class Problem:
     An optimization problem class that works with ProSRS algorithm.
     """
     def __init__(self, func, domain, x_var=None, y_var='y', name='demo', true_func=None, 
-                 min_loc=None, min_true_func=None, sd=None):
+                 min_loc=None, min_true_func=None, noise_type=None, sd=None):
         """
         Constructor. 
         
@@ -52,8 +52,11 @@ class Problem:
             min_true_func (float or None, optional): Global minimum of function 
                 `true_func` on the `domain`. If None, then global minimum is unknown.
             
+            noise_type (str or None, optional): Type of random noises (e.g., 'Gaussian').
+                If None, then the noise type is unknown.
+            
             sd (float or None, optional): Standard deviation of random noise in `func`.
-                If None, then standard deviation is unknown or not well-defined.
+                If None, then the standard deviation is unknown.
         
         Raises:
             
@@ -69,6 +72,7 @@ class Problem:
         self.F = true_func
         self.min_loc = min_loc
         self.min_true_func = min_true_func
+        self.noise_type = noise_type
         self.sd = sd
         self.domain_lb, self.domain_ub = zip(*self.domain) # domain lower bounds and domain upper bounds
         self.domain_lb, self.domain_ub = np.array(self.domain_lb), np.array(self.domain_ub) # convert to 1d array
@@ -91,15 +95,18 @@ class Problem:
         line = 'Optimization problem (dim = %d): %s\n' % (self.dim, self.name)
         line += '- Domain: %s\n' % ('{'+', '.join(["'%s': %s" % (x, str(tuple(v))) for x, v in zip(self.x_var, self.domain)])+'}')
         line += "- Y variable: '%s'\n" % str(self.y_var)
+        if self.sd is not None and self.noise_type is not None:
+            line += '- Random noise: %s with standard deviation of %g\n' % (self.noise_type, self.sd)
         if self.min_true_func is not None:
             line += '- Global minimum: %g\n' % self.min_true_func
         else:
             line += '- Global minimum: unknown\n'
         if self.min_loc is not None:
-            line += '- Global minimum locations: %s' % ', '.join(["%s = %s" % (str(tuple(self.x_var)), str(tuple(v)))\
+            line += '- Global minimum locations: %s\n' % ', '.join(["%s = %s" % (str(tuple(self.x_var)), str(tuple(v)))\
                                                                    for v in self.min_loc])
         else:
-            line += '- Global minimum locations: unknown'
+            line += '- Global minimum locations: unknown\n'
+        line = line.rstrip() # remove \n at the end
         return line
     
         

@@ -307,9 +307,9 @@ class Optimizer:
             sys.stderr = std_err_logger(std_err_file)
         
         if verbosity == 2:
-            print
+            print('')
             self.show(select=['problem']) # show optimization problem
-            print
+            print('')
             self.show(select=['config']) # show optimization configuration
         
         if verbosity > 0:
@@ -343,7 +343,7 @@ class Optimizer:
             print('\nFinished running ProSRS algorithm.')
             
         if verbosity == 2:
-            print
+            print('')
             self.show(select=['result']) # show optimization result
             
         # reset stdout and stderr
