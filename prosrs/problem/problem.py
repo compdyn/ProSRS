@@ -92,9 +92,11 @@ class Problem:
         
         Use ``print()`` method to call this function.
         """
-        line = 'Optimization problem (dim = %d): %s\n' % (self.dim, self.name)
+        line = 'Optimization problem:\n'
+        line += '- Name: %s\n' % self.name
+        line += '- Dimension: %d\n' % self.dim
         line += '- Domain: %s\n' % ('{'+', '.join(["'%s': %s" % (x, str(tuple(v))) for x, v in zip(self.x_var, self.domain)])+'}')
-        line += "- Y variable: '%s'\n" % str(self.y_var)
+        line += "- Response variable: '%s'\n" % str(self.y_var)
         if self.sd is not None and self.noise_type is not None:
             line += '- Random noise: %s with standard deviation of %g\n' % (self.noise_type, self.sd)
         if self.min_true_func is not None:
@@ -110,7 +112,7 @@ class Problem:
         return line
     
         
-    def visualize(self, true_func=False, n_samples=None, plot_2d='contour', 
+    def visualize(self, true_func=False, n_samples=None, plot='contour', 
                   contour_levels=100, min_marker_size=10, n_proc=1, fig_path=None):
         """
         Visualize optimization function (only if dimension of function is <= 2).
@@ -124,11 +126,11 @@ class Problem:
                 plots. If None, `n_samples` assumes default values: 20 for 1D 
                 problems; 100 for 2D problems.
             
-            plot_2d (str, optional): Plot style for 2D problems. Must be one 
+            plot (str, optional): Plot style for 2D problems. Must be one 
                 of ['contour', 'surface'].
                 
             contour_levels (int, optional): Number of contour lines in the contour plot.
-                Useful only when `plot_2d` = 'contour'. For more explanation, see
+                Useful only when `plot` = 'contour'. For more explanation, see
                 `Matplotlib Document <https://matplotlib.org/api/_as_gen/matplotlib.pyplot.contourf.html>`.
             
             min_marker_size (int, optional): Marker size for global minimum locations.
@@ -142,7 +144,7 @@ class Problem:
         Raises:
             
             TypeError: If function to be plotted is not callable.
-            ValueError: If dimension is 2 and `plot_2d` is not one of ['contour', 'surface'].
+            ValueError: If dimension is 2 and `plot` is not one of ['contour', 'surface'].
         
         Warnings:
             
@@ -180,7 +182,7 @@ class Problem:
                 X = np.hstack((x1.reshape((n_samples, 1)), x2.reshape((n_samples, 1))))
                 Y = eval_func(plot_f, X, n_proc=n_proc).reshape((n_samp_per_dim, n_samp_per_dim))
                 
-                if plot_2d == 'contour':
+                if plot == 'contour':
                         
                     plt.contourf(x1, x2, Y, contour_levels)
                     if self.min_loc is not None:    
@@ -190,7 +192,7 @@ class Problem:
                     plt.ylabel(self.x_var[1])
                     plt.title('Contour plot of optimization function (problem: %s)' % self.name)
                 
-                elif plot_2d == 'surface':
+                elif plot == 'surface':
 
                     ax = fig.add_subplot(111, projection='3d')
                     ax.plot_surface(x1, x2, Y, rstride=1, cstride=1, cmap=cm.rainbow,
@@ -201,7 +203,7 @@ class Problem:
                     ax.set_title('Surface plot of optimization function (problem: %s)' % self.name)
                     
                 else:
-                    raise ValueError("Invalid plot_2d value. Must be one of ['contour', 'surface']")
+                    raise ValueError("Invalid plot value. Must be one of ['contour', 'surface']")
                 
             plt.show()
             if fig_path is not None:
