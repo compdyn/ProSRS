@@ -264,7 +264,7 @@ class Optimizer:
                     str_len = max(len(y_err_var), max([len(x) for x in y_err_str_list]))
                     y_err_var_str = ' '*(str_len-len(y_err_var))+y_err_var # pad space at front
                     display_y_err_str = [' '*(str_len-len(x))+x for x in y_err_str_list] # pad space at front
-                    print('- Top %d points sorted by Monte Carlo mean estimates:' % n_display)
+                    print('- Top %d points sorted by mean response estimates in Column %d:' % (n_display, self._dim+1))
                     space = ' '*3
                     front_space = ' '*5
                     print(front_space+space.join(x_var_str+[y_var_str, y_err_var_str]))
