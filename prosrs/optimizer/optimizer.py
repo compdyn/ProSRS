@@ -165,6 +165,7 @@ class Optimizer:
             self.act_node_ix = 0 # index of the activate node for the zoom level `self.zoom_lv` (zero-based).
             self.srs_wgt_pat = np.linspace(self._wgt_pat_bd[0], self._wgt_pat_bd[1], self._n_worker) # weight pattern in the SRS method.
             self.tree = self.init_tree() # initialize optimization tree
+            self.eval_seeds = self._seed+1+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int) # random seeds for parallel evaluations
         else:
             # load optimizer state from the last run
             self.load_state()
@@ -593,7 +594,6 @@ class Optimizer:
             
         t1 = default_timer()
         
-        self.eval_seeds = self._seed+1+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
         y = eval_func(self._prob.f, x, n_proc=self._n_worker, seeds=self.eval_seeds.tolist(),
                       seed_func=self._seed_func)
         
@@ -624,6 +624,7 @@ class Optimizer:
         t1 = default_timer()
         
         self.i_iter += 1
+        self.eval_seeds = self._seed+1+np.arange(self.i_iter*self._n_worker, (self.i_iter+1)*self._n_worker, dtype=int)
         self.x_tree = np.vstack((self.x_tree, new_x))
         self.y_tree = np.append(self.y_tree, new_y)
         self.x_all = np.vstack((self.x_all, new_x))
@@ -635,7 +636,11 @@ class Optimizer:
         self.t_build_arr = np.append(self.t_build_arr, self.t_build) 
         self.t_srs_arr = np.append(self.t_srs_arr, self.t_srs)
         self.t_prop_arr = np.append(self.t_prop_arr, self.t_prop)
-        self.t_eval_arr = np.append(self.t_eval_arr, self.t_eval)
+        try:
+            self.t_eval_arr = np.append(self.t_eval_arr, self.t_eval)
+        except:
+            # i.e., self.t_eval is not defined. This could happen when one uses customized evaluation function.
+            self.t_eval_arr = np.append(self.t_eval_arr, np.nan)
         self.gSRS_pct_arr = np.append(self.gSRS_pct_arr, self.gSRS_pct)
         self.zoom_lv_arr = np.append(self.zoom_lv_arr, self.zoom_lv)
            
@@ -838,7 +843,8 @@ class Optimizer:
                  t_eval_arr=self.t_eval_arr, t_update_arr=self.t_update_arr, gSRS_pct_arr=self.gSRS_pct_arr,
                  zoom_lv_arr=self.zoom_lv_arr, x_tree=self.x_tree, y_tree=self.y_tree, x_all=self.x_all,
                  y_all=self.y_all, seed_all=self.seed_all, best_x=self.best_x, best_y=self.best_y, 
-                 zoom_lv=self.zoom_lv, act_node_ix=self.act_node_ix, srs_wgt_pat=self.srs_wgt_pat, tree=self.tree)
+                 zoom_lv=self.zoom_lv, act_node_ix=self.act_node_ix, srs_wgt_pat=self.srs_wgt_pat, tree=self.tree,
+                 eval_seeds=self.eval_seeds)
         
         shutil.copy2(self._state_npz_temp_file, self._state_npz_file)
         os.remove(self._state_npz_temp_file) # remove temporary file
@@ -891,6 +897,7 @@ class Optimizer:
         self.act_node_ix = data['act_node_ix'].item(0)
         self.srs_wgt_pat = data['srs_wgt_pat']
         self.tree = data['tree'].item(0)
+        self.eval_seeds = data['eval_seeds']
         # sanity check
         if self._n_iter is None:
             assert(self._n_cycle > self.i_cycle), 'In the last run, %d optimization cycles were completed. To resume, please set n_cycle greater than %d (n_cycle is %d currently).' \
@@ -968,7 +975,8 @@ class Optimizer:
             fig = plt.figure()
             plt.plot(iterations, self.t_build_arr, '-', label='build RBF')
             plt.plot(iterations, self.t_srs_arr, '-', label='SRS')
-            plt.plot(iterations, self.t_eval_arr, '-', label='evaluation')
+            if not np.all(np.isnan(self.t_eval_arr)):
+                plt.plot(iterations, self.t_eval_arr, '-', label='evaluation')
             plt.plot(iterations, self.t_update_arr, '-', label='update')
             plt.grid(True)
             plt.xlabel('Iteration')
