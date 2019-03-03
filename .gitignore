@@ -1,5 +1,11 @@
+# Files
 *.pyc
-test/
 .*
+
+# Directories
+build
+dist
+test
 examples/out
 examples/figures
+*.egg-info
