@@ -6,4 +6,4 @@ about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-so
 
 Define release version.
 """
-__version__ = '0.1.3'
+__version__ = '0.1.4'

@@ -275,7 +275,7 @@ class Optimizer:
                     for x, mean_y, std_y in zip(display_x_str, display_y_str, display_y_err_str):
                         print(front_space+space.join(x+[mean_y, std_y]))
             except:
-                print("No posterior evaluation results can be displayed. Please run 'posterior_eval' first.")
+                sys.exit("Error! No posterior evaluation results can be displayed. Please run 'posterior_eval' first.")
         
 
     def run(self, std_out_file=None, std_err_file=None, verbosity=1):
@@ -992,8 +992,8 @@ class Optimizer:
                 plt.show()
                 if 'time' in file_dict:
                     fig.savefig(file_dict['time'])
-        except:
-            print('Unable to generate plots. This may be due to unsuccessful installation of matplotlib package. For more, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.')
+        except Exception as e:
+            sys.exit('Error! Unable to generate plots for visualization: %s. This may be due to unsuccessful installation of matplotlib package. For more, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.' % str(e))
     
     
     def posterior_eval(self, n_top=0.1, n_repeat=10, n_worker=None, seed=1, seed_func=None, verbose=True):

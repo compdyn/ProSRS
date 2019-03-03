@@ -17,4 +17,4 @@ try:
     from matplotlib import cm
     from mpl_toolkits.mplot3d import Axes3D
 except Exception as e:
-    warnings.warn('Unable to import modules from matplotlib: %s\nAs a result, the visualization capabilities in this package may be impaired. For the workarounds and the implications of this, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.' % str(e))
+    warnings.warn('Unable to import modules from matplotlib: %s\nAs a result, the visualization capabilities in the prosrs package may be impaired. For the workarounds and the implications of this, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.' % str(e))

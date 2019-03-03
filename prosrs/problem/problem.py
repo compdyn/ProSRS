@@ -6,6 +6,7 @@ about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-so
 
 Define an optimization problem.
 """
+import sys
 import numpy as np
 from ..utility.functions import eval_func
 try:
@@ -207,6 +208,6 @@ class Problem:
                 plt.show()
                 if fig_path is not None:
                     fig.savefig(fig_path)
-            except:
-                print('Unable to generate plots. This may be due to unsuccessful installation of matplotlib package. For more, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.')
+            except Exception as e:
+                sys.exit('Error! Unable to generate plots for visualization: %s. This may be due to unsuccessful installation of matplotlib package. For more, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.' % str(e))
 
