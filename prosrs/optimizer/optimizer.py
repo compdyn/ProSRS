@@ -189,11 +189,7 @@ class Optimizer:
                     'post_result': posterior evaluation results.
                     
             n_display (int, optional): Number of (top) points to be displayed for posterior evaluation results.
-                This parameter takes effects only when `select` contains 'post_result'. 
-        
-        Raises:
-            
-            RuntimeError: if unable to display posterior evaluation results.
+                This parameter takes effects only when `select` contains 'post_result'.
         """
         select_possible_vals = ['problem', 'config', 'status', 'result', 'post_result']
         assert(type(select) in [list, tuple] and set(select)<=set(select_possible_vals)), 'invalid select value'
@@ -278,8 +274,8 @@ class Optimizer:
                     print(front_space+space.join(x_var_str+[y_var_str, y_err_var_str]))
                     for x, mean_y, std_y in zip(display_x_str, display_y_str, display_y_err_str):
                         print(front_space+space.join(x+[mean_y, std_y]))
-            except Exception as e:
-                raise RuntimeError("Error: %s\nNo posterior evaluation results can be displayed. Please run 'posterior_eval' first." % str(e))
+            except:
+                print("No posterior evaluation results can be displayed. Please run 'posterior_eval' first.")
         
 
     def run(self, std_out_file=None, std_err_file=None, verbosity=1):
@@ -929,10 +925,6 @@ class Optimizer:
             save_file (list or tuple or None, optional): File paths to save figures.
                 If ``list`` or ``tuple``, then it consists of file paths for each plot in `select`.
                 If None, then no figures will be saved.
-        
-        Raises:
-            
-            RuntimeError: If any exception occurs during plotting. 
         """
         select_possible_vals = ['optim_curve', 'zoom_level', 'time']
         assert(type(select) in [list, tuple] and set(select)<=set(select_possible_vals)), 'invalid select value'
@@ -1000,8 +992,8 @@ class Optimizer:
                 plt.show()
                 if 'time' in file_dict:
                     fig.savefig(file_dict['time'])
-        except Exception as e:
-            raise RuntimeError('Unable to generate plots. Error message: %s\nThis may be due to unsuccessful installation of matplotlib package. For more, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.' % str(e))
+        except:
+            print('Unable to generate plots. This may be due to unsuccessful installation of matplotlib package. For more, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.')
     
     
     def posterior_eval(self, n_top=0.1, n_repeat=10, n_worker=None, seed=1, seed_func=None, verbose=True):
