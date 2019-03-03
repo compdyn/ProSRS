@@ -209,5 +209,5 @@ class Problem:
                 if fig_path is not None:
                     fig.savefig(fig_path)
             except Exception as e:
-                raise RuntimeError('Unable to generate plots. Error message: %s\n This may be due to unsuccessful installation of matplotlib package. Reinstall matplotlib if necessary.' % str(e))
+                raise RuntimeError('Unable to generate plots. Error message: %s\nThis may be due to unsuccessful installation of matplotlib package. For more, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.' % str(e))
 
