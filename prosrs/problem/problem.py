@@ -7,11 +7,13 @@ about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-so
 Define an optimization problem.
 """
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib import cm
-import warnings
 from ..utility.functions import eval_func
-from mpl_toolkits.mplot3d import Axes3D # needed for ``fig.add_subplot(111, projection='3d')``   
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib import cm
+    from mpl_toolkits.mplot3d import Axes3D # needed for ``fig.add_subplot(111, projection='3d')``
+except:
+    pass
 
 
 class Problem:
@@ -144,68 +146,68 @@ class Problem:
         Raises:
             
             TypeError: If function to be plotted is not callable.
-            ValueError: If dimension is 2 and `plot` is not one of ['contour', 'surface'].
-        
-        Warnings:
-            
-            UserWarning: If dimension of function is greater than 2.
-            
+            ValueError: If dimension is 2 and `plot` is not one of ['contour', 'surface'] or 
+                        if dimension of function is greater than 2. 
+            RuntimeError: If any exception occurs during plotting.            
         """
         if self.dim > 2:
-            warnings.warn('Visualization for problems of dimension greater than 2 is not implemented.')
+            raise ValueError('Visualization for problems of dimension greater than 2 is not implemented.')
         else:
-            plot_f = self.F if true_func else self.f # function to be plotted
-            # sanity check
-            if not callable(plot_f):
-                raise TypeError('Optimization function to be plotted is not callable.')
-            
-            fig = plt.figure()
-            
-            if self.dim == 1:
+            try:
+                plot_f = self.F if true_func else self.f # function to be plotted
+                # sanity check
+                if not callable(plot_f):
+                    raise TypeError('Optimization function to be plotted is not callable.')
                 
-                n_samples = 20 if n_samples is None else n_samples
-                X = np.linspace(self.domain[0][0], self.domain[0][1], n_samples)
-                Y = eval_func(plot_f, X.reshape((-1, 1)), n_proc=n_proc)
-                plt.plot(X, Y, 'b-')
-                if self.min_loc is not None:
-                    Ymin = [plot_f(x) for x in self.min_loc]
-                    plt.plot(self.min_loc, Ymin, 'rx', markersize=min_marker_size)
+                fig = plt.figure()
                 
-            else: # i.e., self.dim == 2
-                
-                n_samp_per_dim = 10 if n_samples is None else int(n_samples**0.5) # number of samples per dimension
-                n_samples = n_samp_per_dim**2
-                # generate and evaluate samples
-                x1 = np.linspace(self.domain[0][0], self.domain[0][1], n_samp_per_dim)
-                x2 = np.linspace(self.domain[1][0], self.domain[1][1], n_samp_per_dim)
-                x1, x2 = np.meshgrid(x1, x2)
-                X = np.hstack((x1.reshape((n_samples, 1)), x2.reshape((n_samples, 1))))
-                Y = eval_func(plot_f, X, n_proc=n_proc).reshape((n_samp_per_dim, n_samp_per_dim))
-                
-                if plot == 'contour':
-                        
-                    plt.contourf(x1, x2, Y, contour_levels)
-                    if self.min_loc is not None:    
-                        plt.plot(self.min_loc[:,0], self.min_loc[:,1], 'w.', markersize=min_marker_size)
-                    plt.colorbar()
-                    plt.xlabel(self.x_var[0])
-                    plt.ylabel(self.x_var[1])
-                    plt.title('Contour plot of optimization function (problem: %s)' % self.name)
-                
-                elif plot == 'surface':
-
-                    ax = fig.add_subplot(111, projection='3d')
-                    ax.plot_surface(x1, x2, Y, rstride=1, cstride=1, cmap=cm.rainbow,
-                                    linewidth=0, antialiased=False)
-                    ax.axis('off')
-                    ax.set_xlabel(self.x_var[0])
-                    ax.set_ylabel(self.x_var[1])
-                    ax.set_title('Surface plot of optimization function (problem: %s)' % self.name)
+                if self.dim == 1:
                     
-                else:
-                    raise ValueError("Invalid plot value. Must be one of ['contour', 'surface']")
-                
-            plt.show()
-            if fig_path is not None:
-                fig.savefig(fig_path)
+                    n_samples = 20 if n_samples is None else n_samples
+                    X = np.linspace(self.domain[0][0], self.domain[0][1], n_samples)
+                    Y = eval_func(plot_f, X.reshape((-1, 1)), n_proc=n_proc)
+                    plt.plot(X, Y, 'b-')
+                    if self.min_loc is not None:
+                        Ymin = [plot_f(x) for x in self.min_loc]
+                        plt.plot(self.min_loc, Ymin, 'rx', markersize=min_marker_size)
+                    
+                else: # i.e., self.dim == 2
+                    
+                    n_samp_per_dim = 10 if n_samples is None else int(n_samples**0.5) # number of samples per dimension
+                    n_samples = n_samp_per_dim**2
+                    # generate and evaluate samples
+                    x1 = np.linspace(self.domain[0][0], self.domain[0][1], n_samp_per_dim)
+                    x2 = np.linspace(self.domain[1][0], self.domain[1][1], n_samp_per_dim)
+                    x1, x2 = np.meshgrid(x1, x2)
+                    X = np.hstack((x1.reshape((n_samples, 1)), x2.reshape((n_samples, 1))))
+                    Y = eval_func(plot_f, X, n_proc=n_proc).reshape((n_samp_per_dim, n_samp_per_dim))
+                    
+                    if plot == 'contour':
+                            
+                        plt.contourf(x1, x2, Y, contour_levels)
+                        if self.min_loc is not None:    
+                            plt.plot(self.min_loc[:,0], self.min_loc[:,1], 'w.', markersize=min_marker_size)
+                        plt.colorbar()
+                        plt.xlabel(self.x_var[0])
+                        plt.ylabel(self.x_var[1])
+                        plt.title('Contour plot of optimization function (problem: %s)' % self.name)
+                    
+                    elif plot == 'surface':
+    
+                        ax = fig.add_subplot(111, projection='3d')
+                        ax.plot_surface(x1, x2, Y, rstride=1, cstride=1, cmap=cm.rainbow,
+                                        linewidth=0, antialiased=False)
+                        ax.axis('off')
+                        ax.set_xlabel(self.x_var[0])
+                        ax.set_ylabel(self.x_var[1])
+                        ax.set_title('Surface plot of optimization function (problem: %s)' % self.name)
+                        
+                    else:
+                        raise ValueError("Invalid plot value. Must be one of ['contour', 'surface']")
+                    
+                plt.show()
+                if fig_path is not None:
+                    fig.savefig(fig_path)
+            except Exception as e:
+                raise RuntimeError('Unable to generate plots. Error message: %s\n This may be due to unsuccessful installation of matplotlib package. Reinstall matplotlib if necessary.' % str(e))
 

@@ -17,8 +17,11 @@ from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP, STATE_
 from ..utility.classes import std_out_logger, std_err_logger
 from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one, eff_npt, boxify, domain_intersect
 from .surrogate import RBF_reg
-import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
+except:
+    pass
 
 
 class Optimizer:
@@ -922,6 +925,10 @@ class Optimizer:
             save_file (list or tuple or None, optional): File paths to save figures.
                 If ``list`` or ``tuple``, then it consists of file paths for each plot in `select`.
                 If None, then no figures will be saved.
+        
+        Raises:
+            
+            RuntimeError: If any exception occurs during plotting. 
         """
         select_possible_vals = ['optim_curve', 'zoom_level', 'time']
         assert(type(select) in [list, tuple] and set(select)<=set(select_possible_vals)), 'invalid select value'
@@ -932,62 +939,65 @@ class Optimizer:
             file_dict = {}
         iterations = range(1, self.i_iter+1)
         
-        if 'optim_curve' in select:
-            vals = self.y_all.reshape((self.i_iter, self._n_worker))
-            best_val_arr = np.zeros(self.i_iter)
-            for i, val in enumerate(vals):
-                if i == 0:
-                    best_val_arr[i] = np.amin(val)
-                else:
-                    best_val_arr[i] = min(best_val_arr[i-1], np.amin(val))
-            fig = plt.figure()
-            plt.plot(iterations, best_val_arr, 'b-', label='best (noisy) value')
-            if self._prob.min_true_func is not None:
-                plt.plot(iterations, np.ones_like(iterations)*self._prob.min_true_func, '-', label='global min')
-                if self._prob.sd is not None:
-                    plt.plot(iterations, np.ones_like(iterations)*(self._prob.min_true_func+self._prob.sd), 
-                             '--', label='1 std of noise')
+        try:
+            if 'optim_curve' in select:
+                vals = self.y_all.reshape((self.i_iter, self._n_worker))
+                best_val_arr = np.zeros(self.i_iter)
+                for i, val in enumerate(vals):
+                    if i == 0:
+                        best_val_arr[i] = np.amin(val)
+                    else:
+                        best_val_arr[i] = min(best_val_arr[i-1], np.amin(val))
+                fig = plt.figure()
+                plt.plot(iterations, best_val_arr, 'b-', label='best (noisy) value')
+                if self._prob.min_true_func is not None:
+                    plt.plot(iterations, np.ones_like(iterations)*self._prob.min_true_func, '-', label='global min')
+                    if self._prob.sd is not None:
+                        plt.plot(iterations, np.ones_like(iterations)*(self._prob.min_true_func+self._prob.sd), 
+                                 '--', label='1 std of noise')
+                    plt.legend(loc='best', framealpha=0.5)
+                plt.grid(True)
+                plt.xlabel('Iteration')
+                plt.ylabel('Function value')
+                plt.title('Optimization curve (problem: %s)' % self._prob.name)
+                fig.gca().xaxis.set_major_locator(MaxNLocator(integer=True)) # force x ticks to be integer-valued
+                plt.show()
+                if 'optim_curve' in file_dict: 
+                    fig.savefig(file_dict['optim_curve'])
+                    
+            if 'zoom_level' in select:
+                fig = plt.figure()
+                plt.plot(iterations, self.zoom_lv_arr, 'b-')
+                plt.grid(True)
+                plt.xlabel('Iteration')
+                plt.ylabel('Zoom level')
+                plt.ylim([-1, np.amax(self.zoom_lv_arr)+1])
+                plt.yticks(np.arange(np.amax(self.zoom_lv_arr)+1))
+                plt.title('Zoom level (problem: %s)' % self._prob.name)
+                fig.gca().xaxis.set_major_locator(MaxNLocator(integer=True)) # force x ticks to be integer-valued
+                plt.show()
+                if 'zoom_level' in file_dict:
+                    fig.savefig(file_dict['zoom_level'])
+            
+            if 'time' in select:
+                fig = plt.figure()
+                plt.plot(iterations, self.t_build_arr, '-', label='build RBF')
+                plt.plot(iterations, self.t_srs_arr, '-', label='SRS')
+                if not np.all(np.isnan(self.t_eval_arr)):
+                    plt.plot(iterations, self.t_eval_arr, '-', label='evaluation')
+                plt.plot(iterations, self.t_update_arr, '-', label='update')
+                plt.grid(True)
+                plt.xlabel('Iteration')
+                plt.ylabel('Wall time (sec)')
+                plt.yscale('log')
                 plt.legend(loc='best', framealpha=0.5)
-            plt.grid(True)
-            plt.xlabel('Iteration')
-            plt.ylabel('Function value')
-            plt.title('Optimization curve (problem: %s)' % self._prob.name)
-            fig.gca().xaxis.set_major_locator(MaxNLocator(integer=True)) # force x ticks to be integer-valued
-            plt.show()
-            if 'optim_curve' in file_dict: 
-                fig.savefig(file_dict['optim_curve'])
-                
-        if 'zoom_level' in select:
-            fig = plt.figure()
-            plt.plot(iterations, self.zoom_lv_arr, 'b-')
-            plt.grid(True)
-            plt.xlabel('Iteration')
-            plt.ylabel('Zoom level')
-            plt.ylim([-1, np.amax(self.zoom_lv_arr)+1])
-            plt.yticks(np.arange(np.amax(self.zoom_lv_arr)+1))
-            plt.title('Zoom level (problem: %s)' % self._prob.name)
-            fig.gca().xaxis.set_major_locator(MaxNLocator(integer=True)) # force x ticks to be integer-valued
-            plt.show()
-            if 'zoom_level' in file_dict:
-                fig.savefig(file_dict['zoom_level'])
-        
-        if 'time' in select:
-            fig = plt.figure()
-            plt.plot(iterations, self.t_build_arr, '-', label='build RBF')
-            plt.plot(iterations, self.t_srs_arr, '-', label='SRS')
-            if not np.all(np.isnan(self.t_eval_arr)):
-                plt.plot(iterations, self.t_eval_arr, '-', label='evaluation')
-            plt.plot(iterations, self.t_update_arr, '-', label='update')
-            plt.grid(True)
-            plt.xlabel('Iteration')
-            plt.ylabel('Wall time (sec)')
-            plt.yscale('log')
-            plt.legend(loc='best', framealpha=0.5)
-            plt.title('Computational cost (problem: %s)' % self._prob.name)
-            fig.gca().xaxis.set_major_locator(MaxNLocator(integer=True)) # force x ticks to be integer-valued
-            plt.show()
-            if 'time' in file_dict:
-                fig.savefig(file_dict['time'])
+                plt.title('Computational cost (problem: %s)' % self._prob.name)
+                fig.gca().xaxis.set_major_locator(MaxNLocator(integer=True)) # force x ticks to be integer-valued
+                plt.show()
+                if 'time' in file_dict:
+                    fig.savefig(file_dict['time'])
+        except Exception as e:
+                raise RuntimeError('Unable to generate plots. Error message: %s\n This may be due to unsuccessful installation of matplotlib package. Reinstall matplotlib if necessary.' % str(e))
     
     
     def posterior_eval(self, n_top=0.1, n_repeat=10, n_worker=None, seed=1, seed_func=None, verbose=True):
