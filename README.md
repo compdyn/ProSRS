@@ -11,16 +11,20 @@ Compared to the popular Bayesian optimization algorithms, ProSRS is able to achi
 
 # Installation
 
-Python packages:
+Python dependencies:
   
   - `numpy`: http://www.numpy.org
   - `scipy`: https://www.scipy.org
   - `matplotlib`: https://matplotlib.org
-  - `sklearn`: https://scikit-learn.org/stable/
+  - `scikit-learn`: https://scikit-learn.org/stable/
   - `pyDOE`: https://pythonhosted.org/pyDOE/
   - `pathos`: https://pypi.org/project/pathos/
 
-**Note:** ProSRS has been tested against both Python2 and Python3. Users are welcome to install packages with either Python version.
+To install `prosrs` package, type and run the following:
+
+```
+pip install prosrs
+```
 
 # Getting started
 
