@@ -7,12 +7,16 @@ about the license, see http://otm.illinois.edu/disclose-protect/illinois-open-so
 """
 import setuptools
 
+# read the long description of the package from README
 with open("README.md", 'r') as f:
     long_description = f.read()
+    
+# read __version__ from the file
+exec(open("prosrs/version.py").read())
 
 setuptools.setup(
     name="prosrs",
-    version="0.0.1",
+    version=__version__,
     description="A tree-based parallel surrogate optimization algorithm for optimizing noisy expensive functions",
     long_description=long_description,
     long_description_content_type="text/markdown",
