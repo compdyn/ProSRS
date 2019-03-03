@@ -1,6 +1,7 @@
 # Files
 *.pyc
 .*
+publish.sh
 
 # Directories
 build
