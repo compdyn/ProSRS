@@ -29,4 +29,4 @@ pip install prosrs
 
 # Getting started
 
-After having installed the required Python packages, users are ready to use ProSRS algorithm for solving optimization problems. The easiest way of getting started is to read the tutorials in the [`examples`](examples) directory, where different usages, from the basic level to the advanced level, are demonstrated through code examples. Of course, users are also encouraged to check out the source codes of the algorithm in the [`prosrs`](prosrs) directory.
+After having successfully installed the `prosrs` package, users are ready to use ProSRS algorithm for solving optimization problems. The easiest way of getting started is to read the tutorials in the [`examples`](examples) directory, where different usages, from the basic level to the advanced level, are demonstrated through code examples. Of course, users are also encouraged to check out the source codes of the algorithm in the [`prosrs`](prosrs) directory.
