@@ -21,11 +21,10 @@ Python dependencies:
   - `pathos`: https://pypi.org/project/pathos/
 
 To install `prosrs` package, type and run the following:
-
 ```
 pip install prosrs
 ```
-**Note:** The above `pip` method should work for most users. If a user encounters any installation problems including import errors or warnings, please refer to the Wiki page `Installation Troubleshooting` for possible solutions.
+**Note:** The above `pip` method should work for most users. If a user encounters any installation problems including import errors or warnings, please refer to the [`Wiki page`](https://github.com/compdyn/ProSRS/wiki/Installation-Troubleshooting) for possible solutions.
 
 # Getting started
 
