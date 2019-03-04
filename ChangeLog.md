@@ -1,5 +1,8 @@
 This document keeps a record of changes made between releases in a reverse chronological order. Every release is itemized with the format: `[{VERSION}] - {RELEASE_DATE} - [{GIT_COMMIT}]`.
 
+### [1.0.0] - 2019-03-03 - [d5c6e276ef022a1078b56c5a538285272a5ad74c]
+- Update README in the home page.
+
 ### [0.1.4] - 2019-03-03 - [f16ddb35d774278996f1858b855378758a40b349]
 - Improve exception handling.
 
