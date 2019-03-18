@@ -847,7 +847,7 @@ class Optimizer:
                  zoom_lv_arr=self.zoom_lv_arr, x_tree=self.x_tree, y_tree=self.y_tree, x_all=self.x_all,
                  y_all=self.y_all, seed_all=self.seed_all, best_x=self.best_x, best_y=self.best_y, 
                  zoom_lv=self.zoom_lv, act_node_ix=self.act_node_ix, srs_wgt_pat=self.srs_wgt_pat, tree=self.tree,
-                 eval_seeds=self.eval_seeds)
+                 eval_seeds=self.eval_seeds, py_version=sys.version_info[0])
         
         shutil.copy2(self._state_npz_temp_file, self._state_npz_file)
         os.remove(self._state_npz_temp_file) # remove temporary file
@@ -860,12 +860,22 @@ class Optimizer:
         # load state data from pkl file
         if os.path.isfile(self._state_pkl_lock_file):
             os.remove(self._state_pkl_lock_file) # remove lock file, if there's any
-        with open(self._state_pkl_file, 'rb') as f:
-            np.random.set_state(pickle.load(f))    
+        try:
+            with open(self._state_pkl_file, 'rb') as f:
+                np.random.set_state(pickle.load(f))
+        except Exception as e:
+            alter_py = 3 if sys.version_info[0] == 2 else 2 # alternative python version
+            sys.exit("Error! Unable to load random state from the file: '%s'. \nError message: %s. \nExplanation: this issue was probably caused by inconsistent Python versions (e.g., first ran optimization with Python%d and then resumed the optimization with Python%d). \nSolution: now try to run the code again with Python%d." \
+                     % (self._state_pkl_file, e, alter_py, sys.version_info[0], alter_py))
         # load state data from npz file
         if os.path.isfile(self._state_npz_lock_file):
             os.remove(self._state_npz_lock_file) # remove lock file, if there's any
-        data = np.load(self._state_npz_file)
+        try:
+            data = np.load(self._state_npz_file)
+        except Exception as e:
+            alter_py = 3 if sys.version_info[0] == 2 else 2 # alternative python version
+            sys.exit("Error! Unable to load data from the file: '%s'. \nError message: %s. \nExplanation: this issue was probably caused by inconsistent Python versions (e.g., first ran optimization with Python%d and then resumed the optimization with Python%d). \nSolution: now try to run the code again with Python%d." \
+                     % (self._state_npz_file, e, alter_py, sys.version_info[0], alter_py))
         # check consistency
         assert(self._dim==data['_dim'] and self._n_worker==data['_n_worker'] and self._n_cand_fact==data['_n_cand_fact']
                and np.all(self._wgt_pat_bd==data['_wgt_pat_bd']) and self._normalize_data==data['_normalize_data']
