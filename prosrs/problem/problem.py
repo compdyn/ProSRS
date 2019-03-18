@@ -22,7 +22,7 @@ class Problem:
     An optimization problem class that works with ProSRS algorithm.
     """
     def __init__(self, func, domain, x_var=None, y_var='y', name='demo', true_func=None, 
-                 min_loc=None, min_true_func=None, noise_type=None, sd=None):
+                 min_loc=None, min_val=None, noise_type=None, sd=None):
         """
         Constructor. 
         
@@ -52,7 +52,7 @@ class Problem:
                 `true_func` on the `domain`. Each row defines one minimum point. 
                 If None, then the minimum locations are unknown.
             
-            min_true_func (float or None, optional): Global minimum of function 
+            min_val (float or None, optional): Global minimum of function 
                 `true_func` on the `domain`. If None, then global minimum is unknown.
             
             noise_type (str or None, optional): Type of random noises (e.g., 'Gaussian').
@@ -74,7 +74,7 @@ class Problem:
         self.name = name
         self.F = true_func
         self.min_loc = min_loc
-        self.min_true_func = min_true_func
+        self.min_val = min_val
         self.noise_type = noise_type
         self.sd = sd
         self.domain_lb, self.domain_ub = zip(*self.domain) # domain lower bounds and domain upper bounds
@@ -102,8 +102,8 @@ class Problem:
         line += "- Response variable: '%s'\n" % str(self.y_var)
         if self.sd is not None and self.noise_type is not None:
             line += '- Random noise: %s with standard deviation of %g\n' % (self.noise_type, self.sd)
-        if self.min_true_func is not None:
-            line += '- Global minimum: %g\n' % self.min_true_func
+        if self.min_val is not None:
+            line += '- Global minimum: %g\n' % self.min_val
         else:
             line += '- Global minimum: unknown\n'
         if self.min_loc is not None:

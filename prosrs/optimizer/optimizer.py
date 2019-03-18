@@ -229,14 +229,14 @@ class Optimizer:
                 n_pt = len(self.posterior_eval_x) # number of points evaluated in posterior runs
                 assert(len(self.posterior_eval_y) == n_pt and type(self.i_iter_posterior_eval) is int)
                 assert(type(n_display) is int and n_display >= 0)
-                # display true best point and its value
+                # display posterior best point and its value
                 print('Posterior evaluation results:')
                 print('- Condition: run ProSRS algorithm for %d iterations, then run posterior evaluations with %d Monte Carlo repeats'
                         % (self.i_iter_posterior_eval, self.posterior_eval_y.shape[1]))
-                print('- True best point:')
-                print('  '+', '.join(['%s = %g' % (x, v) for x, v in zip(self._prob.x_var, self.true_best_x)]))
-                print('- True best value:')
-                print('  %s = %g' % (self._prob.y_var, self.true_best_y))
+                print('- Posterior best point:')
+                print('  '+', '.join(['%s = %g' % (x, v) for x, v in zip(self._prob.x_var, self.post_best_x)]))
+                print('- Posterior best value:')
+                print('  %s = %g' % (self._prob.y_var, self.post_best_y))
                 # display top points
                 if n_display > 0:
                     # get (sorted) top points based on posterior mean values
@@ -447,7 +447,7 @@ class Optimizer:
                 sys.stdout.write(' Done (time took: %.2e sec).\n' % (t2-t1))
                 
         else:
-            # i.e., current iteration is in true optimization phase
+            # i.e., current iteration is in the optimization phase (not in the DOE phase)
             
             ########### Get activated node ##############
             
@@ -946,10 +946,10 @@ class Optimizer:
                         best_val_arr[i] = min(best_val_arr[i-1], np.amin(val))
                 fig = plt.figure()
                 plt.plot(iterations, best_val_arr, 'b-', label='best (noisy) value')
-                if self._prob.min_true_func is not None:
-                    plt.plot(iterations, np.ones_like(iterations)*self._prob.min_true_func, '-', label='global min')
+                if self._prob.min_val is not None:
+                    plt.plot(iterations, np.ones_like(iterations)*self._prob.min_val, '-', label='global min')
                     if self._prob.sd is not None:
-                        plt.plot(iterations, np.ones_like(iterations)*(self._prob.min_true_func+self._prob.sd), 
+                        plt.plot(iterations, np.ones_like(iterations)*(self._prob.min_val+self._prob.sd), 
                                  '--', label='1 std of noise')
                     plt.legend(loc='best', framealpha=0.5)
                 plt.grid(True)
@@ -998,7 +998,7 @@ class Optimizer:
     
     def posterior_eval(self, n_top=0.1, n_repeat=10, n_worker=None, seed=1, seed_func=None, verbose=True):
         """
-        Posterior Monte Carlo evaluations for selecting the true best point.
+        Posterior Monte Carlo evaluations for selecting the posterior best point.
         
         Args:
             
@@ -1062,8 +1062,8 @@ class Optimizer:
         self.posterior_mean = np.mean(self.posterior_eval_y, axis=1)
         self.posterior_std = np.std(self.posterior_eval_y, axis=1, ddof=1)
         min_ix = np.argmin(self.posterior_mean)
-        self.true_best_x = self.posterior_eval_x[min_ix]
-        self.true_best_y = self.posterior_mean[min_ix]
+        self.post_best_x = self.posterior_eval_x[min_ix]
+        self.post_best_y = self.posterior_mean[min_ix]
         
         t2 = default_timer()
         if verbose:
