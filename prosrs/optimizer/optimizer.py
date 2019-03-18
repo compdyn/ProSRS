@@ -597,6 +597,7 @@ class Optimizer:
             
         t1 = default_timer()
         
+        assert(callable(self._prob.f)), 'Error! Unable to perform evaluations. Please first define the (noisy) optimization function ``f`` in the ``Problem`` object!'
         y = eval_func(self._prob.f, x, n_proc=self._n_worker, seeds=self.eval_seeds.tolist(),
                       seed_func=self._seed_func)
         
@@ -1063,6 +1064,7 @@ class Optimizer:
         top_pt_mc = top_pt[np.outer(range(n_top), np.ones(n_repeat, dtype=int)).flatten()] # duplicate each point in `top_pt` for `n_repeat` times
         top_seed_mc = seed+np.arange(n_top*n_repeat, dtype=int)
         assert(len(top_pt_mc) == len(top_seed_mc))
+        assert(callable(self._prob.f)), 'Error! Unable to perform Monte Carlo evaluations. Please first define the (noisy) optimization function ``f`` in the ``Problem`` object!'
         top_val_mc = eval_func(self._prob.f, top_pt_mc, n_proc=n_worker, seeds=top_seed_mc.tolist(), seed_func=seed_func)
         top_val = top_val_mc.reshape((n_top, n_repeat))
         # save results

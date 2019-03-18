@@ -21,20 +21,22 @@ class Problem:
     """
     An optimization problem class that works with ProSRS algorithm.
     """
-    def __init__(self, func, domain, x_var=None, y_var='y', name='demo', true_func=None, 
+    def __init__(self, domain, func=None, x_var=None, y_var='y', name='demo', true_func=None, 
                  min_loc=None, min_val=None, noise_type=None, sd=None):
         """
         Constructor. 
         
         Args:
             
-            func (callable): Function to be optimized over, for which the input is 1d array,
-                the output is a scalar. For example, ``func = lambda x: x[0]**2+x[1]**2``.
-            
             domain (list of tuples): Optimization domain.
-                For example, `domain` = [(0, 1), (0, 2)] means optimizing the
-                2D function `func` of argument ``x`` on the domain: 
+                For example, `domain` = [(0, 1), (0, 2)] means optimizing a
+                2D function ``f(x)`` on the domain: 
                 ``0 <= x[0] <= 1`` and ``0 <= x[1] <= 2``.
+            
+            func (callable or None, optional): (Noisy) function to be optimized over, for which the 
+                input is 1d array, the output is a scalar. 
+                For example, ``func = lambda x: x[0]**2+x[1]**2+np.random.normal()``. 
+                If None, then the optimization function is undefined.
                 
             x_var (list of str or None, optional): Argument names of function `func`.
                 If None, then `x_var` defaults to ['x1', 'x2', ...]
@@ -66,8 +68,8 @@ class Problem:
             ValueError: If dimension of `domain` and dimension of `x_var` do not match.
         
         """
-        self.f = func
         self.domain = domain
+        self.f = func
         self.dim = len(domain) # dimension of optimization problem
         self.x_var = ['x%d' % i for i in range(1, self.dim+1)] if x_var is None else x_var
         self.y_var = y_var
@@ -80,6 +82,7 @@ class Problem:
         self.domain_lb, self.domain_ub = zip(*self.domain) # domain lower bounds and domain upper bounds
         self.domain_lb, self.domain_ub = np.array(self.domain_lb), np.array(self.domain_ub) # convert to 1d array
         # sanity check
+        assert(callable(self.f) or self.f is None)
         if self.dim != len(self.x_var):
             raise ValueError('Inconsistent dimension for x_var and domain.')
         if self.min_loc is not None:

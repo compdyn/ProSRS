@@ -112,7 +112,7 @@ def benchmark_to_problem(benchmark, sd):
         raise ValueError('sd must be non-negative.')
         
     func = lambda x: benchmark.f(x)+np.random.normal(0, sd) # add Gaussian noise
-    prob = Problem(func, domain=benchmark.domain, name=benchmark.name, 
+    prob = Problem(benchmark.domain, func=func, name=benchmark.name, 
                    true_func=benchmark.f, min_loc=benchmark.min, 
                    min_val=benchmark.fmin, noise_type='Gaussian', sd=sd)
     
