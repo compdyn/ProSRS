@@ -15,7 +15,7 @@ from pyDOE import lhs
 from scipy.spatial.distance import cdist
 from ..utility.constants import STATE_NPZ_FILE_TEMP, STATE_PKL_FILE_TEMP, STATE_NPZ_TEMP_FILE_TEMP, STATE_PKL_TEMP_FILE_TEMP
 from ..utility.classes import std_out_logger, std_err_logger
-from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one, eff_npt, boxify, domain_intersect
+from ..utility.functions import eval_func, put_back_box, scale_one_zero, scale_zero_one, eff_npt, boxify, domain_intersect, print_table
 from .surrogate import RBF_reg
 try:
     import matplotlib.pyplot as plt
@@ -174,7 +174,7 @@ class Optimizer:
             self.load_state()
         
     
-    def show(self, select=['problem', 'config', 'status', 'result', 'post_result'], n_display=0):
+    def show(self, select=['problem', 'config', 'status', 'result', 'post_result'], n_top=1):
         """
         Display the optimizer info.
         
@@ -188,8 +188,8 @@ class Optimizer:
                     'result': optimization results.
                     'post_result': posterior evaluation results.
                     
-            n_display (int, optional): Number of (top) points to be displayed for posterior evaluation results.
-                This parameter takes effects only when `select` contains 'post_result'.
+            n_top (int, optional): Number of top points to be displayed for optimzation results/posterior evaluation results.
+                This parameter takes effects only when `select` contains 'result' or 'post_result'.
         """
         select_possible_vals = ['problem', 'config', 'status', 'result', 'post_result']
         assert(type(select) in [list, tuple] and set(select)<=set(select_possible_vals)), 'invalid select value'
@@ -218,64 +218,37 @@ class Optimizer:
                                                                    zip(self._prob.x_var, node_domain)])+'}'))
 
         if 'result' in select:
+            assert(type(n_top) is int and n_top > 0)
+            top_pt, top_val, n_top = self.top_pts(n_top=n_top)
             print('Optimization result:')
             print('- Best point:')
             print('  '+', '.join(['%s = %g' % (x, v) for x, v in zip(self._prob.x_var, self.best_x)]))
             print('- Best (noisy) value:')
             print('  %s = %g' % (self._prob.y_var, self.best_y))
-        
-        if 'post_result' in select:
-            try:
-                n_pt = len(self.posterior_eval_x) # number of points evaluated in posterior runs
-                assert(len(self.posterior_eval_y) == n_pt and type(self.i_iter_posterior_eval) is int)
-                assert(type(n_display) is int and n_display >= 0)
-                # display posterior best point and its value
-                print('Posterior evaluation results:')
-                print('- Condition: run ProSRS algorithm for %d iterations, then run posterior evaluations with %d Monte Carlo repeats'
-                        % (self.i_iter_posterior_eval, self.posterior_eval_y.shape[1]))
-                print('- Posterior best point:')
-                print('  '+', '.join(['%s = %g' % (x, v) for x, v in zip(self._prob.x_var, self.post_best_x)]))
-                print('- Posterior best value:')
-                print('  %s = %g' % (self._prob.y_var, self.post_best_y))
+            if n_top > 1:
                 # display top points
-                if n_display > 0:
-                    # get (sorted) top points based on posterior mean values
-                    if n_display > n_pt:
-                        warnings.warn('Number of points in posterior evaluations is %d, less than n_display (%d). Reset n_display = %d.'
-                                      % (n_pt, n_display, n_pt))
-                        n_display = n_pt
-                    sort_ix = np.argsort(self.posterior_mean)
-                    display_x = self.posterior_eval_x[sort_ix][:n_display]
-                    display_mean_y = self.posterior_mean[sort_ix][:n_display]
-                    display_std_y = self.posterior_std[sort_ix][:n_display]
-                    # format into strings
-                    x_var_str = []
-                    display_x_str = []
-                    for j in range(self._dim):
-                        var_len = len(self._prob.x_var[j])
-                        x_str_list = ['%g' % x for x in display_x[:, j]]
-                        str_len = max(var_len, max([len(x) for x in x_str_list]))
-                        x_var_str.append(' '*(str_len-var_len)+self._prob.x_var[j]) # pad space at front
-                        display_x_str.append([' '*(str_len-len(x))+x for x in x_str_list]) # pad space at front
-                    display_x_str = [[x[j] for x in display_x_str] for j in range(n_display)]
-                    y_str_list = ['%g' % x for x in display_mean_y]
-                    y_var = 'mean of '+self._prob.y_var
-                    str_len = max(len(y_var), max([len(x) for x in y_str_list]))
-                    y_var_str = ' '*(str_len-len(y_var))+y_var # pad space at front
-                    display_y_str = [' '*(str_len-len(x))+x for x in y_str_list] # pad space at front
-                    y_err_str_list = ['%g' % x for x in display_std_y]
-                    y_err_var = 'std of '+self._prob.y_var
-                    str_len = max(len(y_err_var), max([len(x) for x in y_err_str_list]))
-                    y_err_var_str = ' '*(str_len-len(y_err_var))+y_err_var # pad space at front
-                    display_y_err_str = [' '*(str_len-len(x))+x for x in y_err_str_list] # pad space at front
-                    print('- Top %d points sorted by mean response estimates in Column %d:' % (n_display, self._dim+1))
-                    space = ' '*3
-                    front_space = ' '*5
-                    print(front_space+space.join(x_var_str+[y_var_str, y_err_var_str]))
-                    for x, mean_y, std_y in zip(display_x_str, display_y_str, display_y_err_str):
-                        print(front_space+space.join(x+[mean_y, std_y]))
-            except:
-                sys.exit("Error! No posterior evaluation results can be displayed. Please run 'posterior_eval' first.")
+                print('- Top %d points sorted by (noisy) function values (Column %d):' % (n_top, self._dim+1))
+                table_data = np.hstack((top_pt, top_val.reshape((-1, 1))))
+                col_name = self._prob.x_var+[self._prob.y_var]
+                print_table(table_data, col_name=col_name)
+                
+        if 'post_result' in select:
+            assert(type(n_top) is int and n_top > 0)
+            top_pt, top_mean_val, top_std_val, n_top = self.post_top_pts(n_top=n_top)
+            # display posterior best point and its value
+            print('Posterior evaluation results:')
+            print('- Condition: run ProSRS algorithm for %d iterations, then run posterior evaluations with %d Monte Carlo repeats'
+                    % (self.i_iter_posterior_eval, self.posterior_eval_y.shape[1]))
+            print('- Best point:')
+            print('  '+', '.join(['%s = %g' % (x, v) for x, v in zip(self._prob.x_var, self.post_best_x)]))
+            print('- Best (mean) value:')
+            print('  %s = %g' % (self._prob.y_var, self.post_best_y))
+            if n_top > 1:
+                # display top points
+                print('- Top %d points sorted by Monte Carlo mean estimates (Column %d):' % (n_top, self._dim+1))
+                table_data = np.hstack((top_pt, top_mean_val.reshape((-1, 1)), top_std_val.reshape((-1, 1))))
+                col_name = self._prob.x_var+['mean of '+self._prob.y_var, 'std of '+self._prob.y_var]
+                print_table(table_data, col_name=col_name)
         
 
     def run(self, std_out_file=None, std_err_file=None, verbosity=1):
@@ -597,7 +570,7 @@ class Optimizer:
             
         t1 = default_timer()
         
-        assert(callable(self._prob.f)), 'Error! Unable to perform evaluations. Please first define the (noisy) optimization function ``f`` in the ``Problem`` object!'
+        assert(callable(self._prob.f)), 'Error! Unable to perform evaluations. Please first define the (noisy) optimization function ``f`` in the ``Problem`` object.'
         y = eval_func(self._prob.f, x, n_proc=self._n_worker, seeds=self.eval_seeds.tolist(),
                       seed_func=self._seed_func)
         
@@ -1007,16 +980,14 @@ class Optimizer:
             sys.exit('Error! Unable to generate plots for visualization: %s. This may be due to unsuccessful installation of matplotlib package. For more, please see the installation note in the README file at `https://github.com/compdyn/ProSRS`.' % str(e))
     
     
-    def posterior_eval(self, n_top=0.1, n_repeat=10, n_worker=None, seed=1, seed_func=None, verbose=True):
+    def posterior_eval(self, n_top=1, n_repeat=10, n_worker=None, seed=1, seed_func=None, verbose=True):
         """
         Posterior Monte Carlo evaluations for selecting the posterior best point.
         
         Args:
             
-            n_top (float or int, optional): Proportion/number of top points to be evaluated.
-                If ``float``, then `n_top` in (0, 1) is the proportion of top points
-                among all the evaluated points. If ``int``, then `n_top`, a positive
-                integer, is the number of top points to be evaluated.
+            n_top (int, optional): Number of top points to be evaluated.
+                These top points are candidates for the posterior best point.
             
             n_repeat (int, optional): Number of Monte Carlo repeats for the evaluations.
             
@@ -1038,19 +1009,14 @@ class Optimizer:
             verbose (bool, optional): Whether to verbose about posterior evaluations.
         """        
         # sanity check
-        assert(type(n_top) in [float, int])
+        assert(type(n_top) is int and n_top > 0)
         assert(type(n_repeat) is int and n_repeat > 0)
         assert(type(seed) is int and seed >= 0)
         n_all = len(self.x_all)
         assert(n_all > 0), 'No points have been evaluated yet. Run ProSRS algorithm first before running posterior evaluations.'
-        if type(n_top) is float:
-            assert(0 < n_top < 1)
-            n_top = max(1, int(round(n_top*n_all)))
-        else:
-            assert(n_top > 0)
-            if n_top > n_all:
-                warnings.warn('Specified n_top is larger than total number of points (%d). Reset n_top = %d.' % (n_all, n_all))
-                n_top = n_all
+        if n_top > n_all:
+            warnings.warn("Specified 'n_top' (%d) is larger than total number of points (%d). Reset 'n_top' = %d." % (n_top, n_all, n_all))
+            n_top = n_all
         n_worker = self._n_worker if n_worker is None else n_worker
         assert(type(n_worker) is int and n_worker > 0)
         
@@ -1059,25 +1025,90 @@ class Optimizer:
             sys.stdout.write('Running posterior evaluations (n_point = %d, n_repeat = %d) ' % (n_top, n_repeat)+'.'*self._verbose_dot_len)
             
         # evaluate top points
-        sort_ix = np.argsort(self.y_all)  
-        top_pt = self.x_all[sort_ix][:n_top]
-        top_pt_mc = top_pt[np.outer(range(n_top), np.ones(n_repeat, dtype=int)).flatten()] # duplicate each point in `top_pt` for `n_repeat` times
+        self.posterior_eval_x, _, _ = self.top_pts(n_top=n_top) # get top points to be evaluated
+        top_pt_mc = self.posterior_eval_x[np.outer(range(n_top), np.ones(n_repeat, dtype=int)).flatten()] # duplicate each point in `self.posterior_eval_x` for `n_repeat` times
         top_seed_mc = seed+np.arange(n_top*n_repeat, dtype=int)
         assert(len(top_pt_mc) == len(top_seed_mc))
-        assert(callable(self._prob.f)), 'Error! Unable to perform Monte Carlo evaluations. Please first define the (noisy) optimization function ``f`` in the ``Problem`` object!'
+        assert(callable(self._prob.f)), 'Error! Unable to perform Monte Carlo evaluations. Please first define the (noisy) optimization function ``f`` in the ``Problem`` object.'
         top_val_mc = eval_func(self._prob.f, top_pt_mc, n_proc=n_worker, seeds=top_seed_mc.tolist(), seed_func=seed_func)
-        top_val = top_val_mc.reshape((n_top, n_repeat))
-        # save results
+        self.posterior_eval_y = top_val_mc.reshape((n_top, n_repeat)) # Monte Carlo evaluations for the top points
+        # get results
         self.i_iter_posterior_eval = self.i_iter
-        self.posterior_eval_x = top_pt
-        self.posterior_eval_y = top_val
-        self.posterior_mean = np.mean(self.posterior_eval_y, axis=1)
-        self.posterior_std = np.std(self.posterior_eval_y, axis=1, ddof=1)
-        min_ix = np.argmin(self.posterior_mean)
-        self.post_best_x = self.posterior_eval_x[min_ix]
-        self.post_best_y = self.posterior_mean[min_ix]
+        post_best_x, post_best_mean, _, _ = self.post_top_pts() # get the best point and mean estimate of its expected function value
+        self.post_best_x = post_best_x[0] # 1d array
+        self.post_best_y = post_best_mean[0] # float
         
         t2 = default_timer()
         if verbose:
             sys.stdout.write(' Done (time took: %.2e sec).\n' % (t2-t1))
+    
+    
+    def top_pts(self, n_top=1):
+        """
+        Get top points based on their noisy function values during optimization.
         
+        Args:
+            
+            n_top (int, optional): Requested number of top points.
+            
+        Returns:
+            
+            top_pt (2d array): Top points. Each row is one point.
+            
+            top_val (1d array): (Noisy) function values of each point in `top_pt`.
+            
+            n_top (int): Actual number of top points.
+        """
+        assert(type(n_top) is int and n_top > 0)
+        n_all = len(self.x_all) # total number of points
+        assert(n_all > 0), 'Unable to select top points because there is no evaluation yet. Please run optimization first.'
+        if n_top > n_all:
+            warnings.warn("The requested number of top points 'n_top' (%d) is larger than the total number of evaluations (%d). Reset 'n_top' = %d."
+                          % (n_top, n_all, n_all))
+            n_top = n_all
+        sort_ix = np.argsort(self.y_all)  
+        top_pt = self.x_all[sort_ix][:n_top]
+        top_val = self.y_all[sort_ix][:n_top]
+        
+        return top_pt, top_val, n_top
+        
+     
+    def post_top_pts(self, n_top=1):
+        """
+        Get top points based on their Monte Carlo mean estimates of expected function values. 
+        These Monte Carlo mean estimates were obtained through posterior evaluations.
+        
+        Args:
+            
+            n_top (int, optional): Requested number of top points.
+            
+        Returns:
+            
+            top_pt (2d array): Top points. Each row is one point.
+            
+            top_mean_val (1d array): Monte Carlo mean estimates of function values for points in `top_pt`.
+            
+            top_std_val (1d array): Standard deviation estimates of function values for points in `top_pt`.
+            
+            n_top (int): Actual number of top points.
+        """
+        assert(type(n_top) is int and n_top > 0)
+        try:
+            n_all = len(self.posterior_eval_x) # total number of posterior evaluations
+            assert(n_all > 0)
+        except:
+            sys.exit("Unable to select top points because there is no posterior evaluation yet. Please run 'posterior_eval' first.")
+        assert(len(self.posterior_eval_y) == n_all)
+        if n_top > n_all:
+            warnings.warn("The requested number of top points 'n_top' (%d) is larger than the total number of posterior evaluations (%d). Reset 'n_top' = %d."
+                          % (n_top, n_all, n_all))
+            n_top = n_all
+        posterior_mean = np.mean(self.posterior_eval_y, axis=1)
+        posterior_std = np.std(self.posterior_eval_y, axis=1, ddof=1)
+        
+        sort_ix = np.argsort(posterior_mean)  
+        top_pt = self.posterior_eval_x[sort_ix][:n_top]
+        top_mean_val = posterior_mean[sort_ix][:n_top]
+        top_std_val = posterior_std[sort_ix][:n_top]
+        
+        return top_pt, top_mean_val, top_std_val, n_top

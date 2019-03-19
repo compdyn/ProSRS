@@ -102,6 +102,8 @@ class Problem:
         line += '- Name: %s\n' % self.name
         line += '- Dimension: %d\n' % self.dim
         line += '- Domain: %s\n' % ('{'+', '.join(["'%s': %s" % (x, str(tuple(v))) for x, v in zip(self.x_var, self.domain)])+'}')
+        if self.f is None:
+            line += "- Optimization function: not provided\n"
         line += "- Response variable: '%s'\n" % str(self.y_var)
         if self.sd is not None and self.noise_type is not None:
             line += '- Random noise: %s with standard deviation of %g\n' % (self.noise_type, self.sd)
@@ -149,19 +151,16 @@ class Problem:
         
         Raises:
             
-            TypeError: If function to be plotted is not callable.
             ValueError: If dimension is 2 and `plot` is not one of ['contour', 'surface'] or 
                         if dimension of function is greater than 2.           
         """
         if self.dim > 2:
             raise ValueError('Visualization for problems of dimension greater than 2 is not implemented.')
         else:
-            try:
-                plot_f = self.F if true_func else self.f # function to be plotted
-                # sanity check
-                if not callable(plot_f):
-                    raise TypeError('Optimization function to be plotted is not callable.')
-                
+            plot_f = self.F if true_func else self.f # function to be plotted
+            # sanity check
+            assert(callable(plot_f)), "The function to be plotted is not callable. Please check 'Problem' defininition."
+            try:    
                 fig = plt.figure()
                 
                 if self.dim == 1:

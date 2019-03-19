@@ -335,3 +335,47 @@ def domain_intersect(domain1, domain2):
         inter_domain = None
         
     return inter_domain
+
+
+def print_table(data, col_name=None, col_space=3, front_space=5):
+    """
+    Print a space-delimited and right-aligned table of data.
+    
+    Args:
+        
+        data (2d array): Table data.
+        
+        col_name (list of str or None, optional): List of column names.
+            If None, then no column name will be printed.
+            
+        col_space (int, optional): Number of white spaces between adjacent columns.
+        
+        front_space (int, optional): Number of white spaces in front of the first column.
+    """
+    assert(type(col_space) is int and col_space >= 0)
+    assert(type(front_space) is int and front_space >= 0)
+    col_pad = ' '*col_space
+    front_pad = ' '*front_space
+    nrow, ncol = data.shape
+    data_str = []
+    if col_name is not None:
+        assert(type(col_name) is list and len(col_name) == ncol)
+        col_name_str = []
+        for j, name in enumerate(col_name):
+            name_len = len(name)
+            data_str_list = ['%g' % x for x in data[:, j]]
+            field_len = max(name_len, max([len(x) for x in data_str_list]))
+            col_name_str.append(' '*(field_len-name_len)+name) # pad space at front
+            data_str.append([' '*(field_len-len(x))+x for x in data_str_list]) # pad space at front
+        # print column names
+        print(front_pad+col_pad.join(col_name_str))
+    else:
+        for j in range(ncol):
+            data_str_list = ['%g' % x for x in data[:, j]]
+            field_len = max([len(x) for x in data_str_list])
+            data_str.append([' '*(field_len-len(x))+x for x in data_str_list]) # pad space at front
+    # print each data row
+    data_str = [[x[i] for x in data_str] for i in range(nrow)] # essentially "transpose" the nested list
+    for row in data_str:
+        print(front_pad+col_pad.join(row))
+        
