@@ -1,5 +1,4 @@
 # ProSRS algorithm
-![version](https://img.shields.io/badge/version-1.0.0-blue.svg) [![license](https://img.shields.io/badge/license-NCSA%20Open%20Source-blue.svg)](https://opensource.org/licenses/NCSA) ![language](https://img.shields.io/badge/language-Python-blue.svg) ![platform](https://img.shields.io/badge/platform-Linux%20%7C%20Mac%20OS%20%7C%20%20Windows-blue.svg)
 
 Progressive Stochastic Response Surface (ProSRS) is a parallel surrogate-based optimization algorithm for optimizing noisy expensive functions. This algorithm utilizes a radial basis function (RBF) as the surrogate, and adopts stochastic response surface (SRS) framework to balance exploitation and exploration. Compared to the [original parallel SRS work](https://pubsonline.informs.org/doi/10.1287/ijoc.1090.0325), the novelties of this algorithm include
 - Introducing a new tree-based technique, known as the "zoom strategy", for efficiency improvement.
@@ -10,6 +9,8 @@ Progressive Stochastic Response Surface (ProSRS) is a parallel surrogate-based o
 ProSRS algorithm is configured in a master-worker structure, where in each optimization iteration, the algorithm (master) constructs a RBF surrogate using the available evaluations, then proposes new points based on the constructed RBF, and finally distributes the tasks of evaluating these points to parallel processes (workers).
 
 Compared to the popular Bayesian optimization algorithms, ProSRS is able to achieve faster convergence on some difficult benchmark problems, and is orders of magnitude cheaper to run. Moreover, ProSRS enjoys asymptotic convergence gaurantees. The common applications of this algorithm include efficient hyperparamter tuning of machine learning models and characterizing expensive simulation models.
+
+![version](https://img.shields.io/badge/version-1.1.0-blue.svg) [![license](https://img.shields.io/badge/license-NCSA%20Open%20Source-blue.svg)](https://opensource.org/licenses/NCSA) ![language](https://img.shields.io/badge/language-Python-blue.svg) ![platform](https://img.shields.io/badge/platform-Linux%20%7C%20Mac%20OS%20%7C%20%20Windows-blue.svg)
 
 # Installation
 
