@@ -1,5 +1,14 @@
 This document keeps a record of changes made between releases in a reverse chronological order. Every release is itemized with the format: `[{VERSION}] - {RELEASE_DATE} - [{GIT_COMMIT}]`.
 
+### [1.1.0] - 2019-03-19 - [94b96e6e4f6a419670b959cc61cf8695202eb52e]
+- Change the naming `true_best` to `post_best`.
+- Change `min_true_func` to `min_val`.
+- Add safeguards to avoid `numpy` loading errors due to inconsistent Python versions.
+- Make `f` optional in the `Problem` definition.
+- Decompose `posterior_eval` method.
+- Add shield badges to README.
+- Add one more advanced example.
+
 ### [1.0.0] - 2019-03-03 - [d5c6e276ef022a1078b56c5a538285272a5ad74c]
 - Update README in the home page.
 
